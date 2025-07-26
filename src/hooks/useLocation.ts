@@ -67,74 +67,93 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     console.log('📍 Position:', pos.coords.latitude, pos.coords.longitude)
 
     try {
-      // Use UPSERT (INSERT ... ON CONFLICT DO UPDATE) for efficiency
-      // This will either insert a new record or update existing one
-      const { error } = await supabase
+      // Simple approach: Always insert a new record and mark old ones inactive
+      console.log('🆕 Creating new location record...')
+      
+      // First, mark all old records for this user as inactive
+      console.log('🔄 Marking old records inactive for user:', userId)
+      const { error: updateError } = await supabase
         .from('user_locations')
-        .upsert({
+        .update({ is_active: false })
+        .eq('user_id', userId)
+
+      if (updateError) {
+        console.error('❌ Error marking old records inactive:', updateError)
+        // Continue anyway, don't throw - we can still insert new record
+      } else {
+        console.log('✅ Old records marked inactive')
+      }
+
+      // Insert new active record
+      console.log('🆕 Inserting new active record...')
+      const { error: insertError } = await supabase
+        .from('user_locations')
+        .insert({
           user_id: userId,
           latitude: pos.coords.latitude,
           longitude: pos.coords.longitude,
           accuracy: pos.coords.accuracy,
           timestamp: new Date().toISOString(),
           is_active: true
-        }, {
-          onConflict: 'user_id',
-          ignoreDuplicates: false
         })
 
-      if (error) {
-        console.error('❌ Error updating location:', error)
-        
-        // Fallback: try the old method if upsert fails
-        console.log('🔄 Fallback: Using update/insert method...')
-        
-        // First try to update existing record
-        const { data: updateData, error: updateError } = await supabase
-          .from('user_locations')
-          .update({
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-            accuracy: pos.coords.accuracy,
-            timestamp: new Date().toISOString(),
-            is_active: true
-          })
-          .eq('user_id', userId)
-          .eq('is_active', true)
-          .select()
+      if (insertError) {
+        console.error('❌ Error inserting location:', insertError)
+        console.error('❌ Insert error details:', {
+          message: insertError.message,
+          code: insertError.code,
+          details: insertError.details,
+          hint: insertError.hint
+        })
+        throw insertError
+      }
 
-        if (updateError || !updateData || updateData.length === 0) {
-          // No existing active record, create new one but limit total records
-          console.log('🆕 Creating new location record...')
-          
-          // First, mark old records as inactive (keep only last 10 records per user)
-          await supabase
-            .from('user_locations')
-            .update({ is_active: false })
-            .eq('user_id', userId)
+      console.log('✅ Location record created successfully')
 
-          // Insert new record
-          await supabase
-            .from('user_locations')
-            .insert({
-              user_id: userId,
-              latitude: pos.coords.latitude,
-              longitude: pos.coords.longitude,
-              accuracy: pos.coords.accuracy,
-              timestamp: new Date().toISOString(),
-              is_active: true
-            })
-        }
+      // Verify the record was created properly
+      console.log('🔍 Verifying location record...')
+      const { data: verification, error: verifyError } = await supabase
+        .from('user_locations')
+        .select('id, is_active, timestamp')
+        .eq('user_id', userId)
+        .eq('is_active', true)
+        .order('timestamp', { ascending: false })
+        .limit(1)
+        .single()
+
+      if (verifyError) {
+        console.error('❌ Error verifying location record:', verifyError)
+      } else if (verification) {
+        console.log('✅ Verification successful - Active record found:', {
+          id: verification.id,
+          is_active: verification.is_active,
+          timestamp: verification.timestamp
+        })
       } else {
-        console.log('✅ Location updated successfully using UPSERT')
+        console.error('❌ Verification failed - No active record found!')
       }
 
       // Notify parent component that location was updated
       if (onLocationUpdate) {
         onLocationUpdate()
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to update location in database:', err)
+      console.error('Error details:', {
+        message: err?.message,
+        code: err?.code,
+        details: err?.details,
+        hint: err?.hint,
+        userId,
+        coords: {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy
+        }
+      })
+      
+      // Don't throw error, just log it - we don't want to break the location tracking
+      // The UI will still show the position even if database update fails
     }
   }, [userId, supabase, onLocationUpdate])
 
@@ -168,10 +187,10 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
       clearInterval(heartbeatRef.current)
     }
     
-    // Send heartbeat every 30 seconds to keep user active
+    // Send heartbeat every 60 seconds to keep user active
     heartbeatRef.current = setInterval(async () => {
       try {
-        await supabase
+        const { error } = await supabase
           .from('user_locations')
           .update({ 
             timestamp: new Date().toISOString(),
@@ -180,11 +199,15 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
           .eq('user_id', userId)
           .eq('is_active', true)
         
-        console.log('💗 Heartbeat sent for user:', userId)
+        if (error) {
+          console.error('Heartbeat failed:', error)
+        } else {
+          console.log('💗 Heartbeat sent for user:', userId)
+        }
       } catch (err) {
         console.error('Heartbeat failed:', err)
       }
-    }, 30000) // 30 seconds
+    }, 60000) // 60 seconds - professional interval
   }, [userId, supabase])
 
   const stopHeartbeat = useCallback(() => {
@@ -416,38 +439,22 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     checkPermission()
   }, [checkPermission])
 
-  // Add beforeunload event to mark user offline when closing app
+  // Add beforeunload event to gracefully handle app closing
   useEffect(() => {
     const handleBeforeUnload = () => {
-      // Mark user offline when closing app
-      markUserOffline()
+      // Just stop the heartbeat and let the smart detection system handle offline status
+      // Don't immediately mark offline - user might come back quickly
       stopHeartbeat()
+      console.log('🔄 Browser closing - heartbeat stopped, offline detection will handle status')
     }
 
     window.addEventListener('beforeunload', handleBeforeUnload)
-    window.addEventListener('unload', handleBeforeUnload)
-    
-    // Also handle when the page loses focus (user switches tabs/apps)
-    const handleVisibilityChange = () => {
-      if (document.hidden && userId) {
-        console.log('🔴 Page hidden, marking user offline and stopping heartbeat')
-        markUserOffline()
-        stopHeartbeat()
-      } else if (!document.hidden && userId) {
-        console.log('🟢 Page visible, starting heartbeat')
-        startHeartbeat()
-      }
-    }
-    
-    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload)
-      window.removeEventListener('unload', handleBeforeUnload)
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
       stopHeartbeat() // Clean up heartbeat on unmount
     }
-  }, [userId, markUserOffline, stopHeartbeat, startHeartbeat])
+  }, [stopHeartbeat])
 
   return {
     position,
