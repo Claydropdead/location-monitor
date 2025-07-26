@@ -115,7 +115,9 @@ export default function RealtimeMap() {
         console.log('User table test successful:', { testUsers })
       }
 
-      // Get all active locations with user info, ordered by timestamp to get latest first
+      // Get all locations with user info (both active and inactive)
+      // This will show online users (is_active: true) and offline users (is_active: false)
+      // Users who logged out or turned off location will be completely removed from database
       console.log('Fetching locations with user data...')
       const { data: locationsData, error: locationsError } = await supabase
         .from('user_locations')
@@ -129,7 +131,7 @@ export default function RealtimeMap() {
           is_active,
           users!inner(id, name, email, phone, role)
         `)
-        .eq('is_active', true)
+        // Remove the .eq('is_active', true) to show both online and offline users
         .order('timestamp', { ascending: false })
         .returns<LocationWithUser[]>()
 

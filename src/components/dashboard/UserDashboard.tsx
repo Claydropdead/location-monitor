@@ -24,7 +24,8 @@ export default function UserDashboard() {
     permission,
     startWatching,
     stopWatching,
-    requestPermission
+    requestPermission,
+    removeUserFromMap
   } = useLocation(user?.id || null, {
     onLocationUpdate: () => {
       setLastLocationUpdate(new Date())
@@ -205,22 +206,15 @@ export default function UserDashboard() {
     console.log('Permission:', permission)
 
     if (isLocationEnabled) {
-      // Stop location tracking
+      // Stop location tracking (INTENTIONAL - user clicked stop)
       if (watchId) {
-        stopWatching(watchId)
+        stopWatching(watchId, true) // true = intentional disconnect, will remove from map
         setWatchId(null)
       }
       
-      // Mark user as inactive
-      if (user) {
-        const { error } = await supabase
-          .from('user_locations')
-          .update({ is_active: false })
-          .eq('user_id', user.id)
-        
-        if (error) {
-          console.error('Error marking user inactive:', error)
-        }
+      // Remove user completely from map (intentional stop)
+      if (user && removeUserFromMap) {
+        removeUserFromMap()
       }
       
       setIsLocationEnabled(false)
@@ -261,17 +255,14 @@ export default function UserDashboard() {
   }
 
   const handleSignOut = async () => {
-    // Stop location tracking before signing out
+    // Stop location tracking before signing out (INTENTIONAL - user logout)
     if (watchId) {
-      stopWatching(watchId)
+      stopWatching(watchId, true) // true = intentional disconnect, will remove from map
     }
     
-    // Mark user as inactive
-    if (user) {
-      await supabase
-        .from('user_locations')
-        .update({ is_active: false })
-        .eq('user_id', user.id)
+    // Remove user completely from map (intentional logout)
+    if (user && removeUserFromMap) {
+      removeUserFromMap()
     }
     
     await supabase.auth.signOut()
