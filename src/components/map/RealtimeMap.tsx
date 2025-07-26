@@ -55,17 +55,17 @@ export default function RealtimeMap() {
       
       await fetchPromise
       
-      // Professional offline detection: Check every 2 minutes for stale locations
+      // 1-minute offline detection: Check every 30 seconds for users without updates in 1 minute
       const offlineDetectionInterval = setInterval(() => {
         if (!mounted) return
-        console.log('🔍 Professional offline detection - checking for stale locations')
+        console.log('🔍 Checking for users offline for more than 1 minute')
         markStaleUsersOffline()
-      }, 120000) // 2 minutes
+      }, 30000) // Check every 30 seconds
       
-      // Backup refresh every 30 seconds (reduced frequency)
+      // Simple backup refresh every 30 seconds
       const intervalId = setInterval(() => {
         if (!mounted) return
-        console.log('🔄 Backup refresh (every 30 seconds)')
+        console.log('🔄 Backup refresh')
         fetchUsersWithLocations()
       }, 30000)
       
@@ -123,9 +123,8 @@ export default function RealtimeMap() {
         console.log('User table test successful:', { testUsers })
       }
 
-      // Get all locations with user info (both active and inactive for "Last seen")
-      // This will show online users (is_active: true) and offline users (is_active: false) 
-      console.log('Fetching locations with user data...')
+      // Get all recent locations (both active and inactive for last 10 minutes)
+      console.log('Fetching recent locations with user data...')
       const { data: locationsData, error: locationsError } = await supabase
         .from('user_locations')
         .select(`
@@ -138,9 +137,8 @@ export default function RealtimeMap() {
           is_active,
           users!inner(id, name, email, phone, role)
         `)
-        // Show both active (online) and inactive (offline with "Last seen") users
-        // Only exclude records older than 24 hours to prevent clutter
-        .gte('timestamp', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+        // Show users from last 10 minutes (both online and offline)
+        .gte('timestamp', new Date(Date.now() - 10 * 60 * 1000).toISOString())
         .order('timestamp', { ascending: false })
         .returns<LocationWithUser[]>()
 
@@ -162,13 +160,12 @@ export default function RealtimeMap() {
       }
 
       if (!locationsData || locationsData.length === 0) {
-        console.log('No active locations found - this means all locations have is_active = false')
-        console.log('Check the database: all user_locations should have at least one record with is_active = true')
+        console.log('No recent locations found')
         setUsers([])
         return
       }
 
-      console.log('Found', locationsData.length, 'active locations')
+      console.log('Found', locationsData.length, 'recent locations')
 
       // Group locations by user and get only the latest one for each user
       const userLocationMap = new Map<string, LocationWithUser>()
@@ -186,15 +183,8 @@ export default function RealtimeMap() {
         }
       })
 
-      // Transform the data with smart offline detection
+      // Transform the data (simple version - no complex offline detection)
       const usersWithLatestLocation: UserWithLocation[] = Array.from(userLocationMap.values()).map(location => {
-        const now = new Date()
-        const lastUpdate = new Date(location.timestamp)
-        const minutesAgo = (now.getTime() - lastUpdate.getTime()) / (1000 * 60)
-        
-        // Smart detection: If location is older than 3 minutes, consider offline
-        const isReallyOnline = location.is_active && minutesAgo < 3
-        
         return {
           id: location.users.id || '',
           name: location.users.name || 'Unknown',
@@ -210,12 +200,12 @@ export default function RealtimeMap() {
             longitude: location.longitude,
             accuracy: location.accuracy || 0,
             timestamp: location.timestamp,
-            is_active: isReallyOnline // Smart detection applied here
+            is_active: location.is_active
           }
         }
       }).filter(user => user.id && user.latest_location)
 
-      console.log('Processed users with smart offline detection:', usersWithLatestLocation.length, 'users')
+      console.log('Processed users:', usersWithLatestLocation.length, 'users')
       
       // Use immediate update for initial load, debounced for subsequent updates
       if (loading) {
@@ -259,10 +249,10 @@ export default function RealtimeMap() {
             console.log('🆕 User:', payload.new?.user_id, '| Active:', payload.new?.is_active)
             if (payload.new?.is_active) {
               console.log('⚡ Processing new location update...')
-              // Add small delay to allow database to stabilize
+              // Reduced delay for faster real-time response
               setTimeout(() => {
                 handleLocationUpdate(payload.new as LocationUpdatePayload)
-              }, 200)
+              }, 50) // Reduced from 200ms to 50ms
             }
           } catch (error) {
             console.error('Error handling INSERT event:', error)
@@ -281,10 +271,10 @@ export default function RealtimeMap() {
             console.log('🔄 REAL-TIME: Location updated!', payload.new)
             console.log('🔄 User:', payload.new?.user_id, '| Active:', payload.new?.is_active)
             console.log('⚡ Processing location update...')
-            // Add small delay to allow database to stabilize
+            // Reduced delay for faster real-time response
             setTimeout(() => {
               handleLocationUpdate(payload.new as LocationUpdatePayload)
-            }, 200)
+            }, 50) // Reduced from 200ms to 50ms
           } catch (error) {
             console.error('Error handling UPDATE event:', error)
           }
@@ -301,7 +291,8 @@ export default function RealtimeMap() {
           try {
             console.log('🗑️ Location deleted:', payload.old)
             if (payload.old?.user_id) {
-              handleUserOffline(payload.old.user_id as string)
+              console.log('🔄 Refreshing map after location deletion')
+              setTimeout(() => fetchUsersWithLocations(), 100)
             }
           } catch (error) {
             console.error('Error handling DELETE event:', error)
@@ -343,10 +334,25 @@ export default function RealtimeMap() {
 
       console.log('📍 Processing location update for user:', locationData.user_id)
       
-      // If location is not active, remove user from map
+      // Handle both active and inactive location updates
       if (!locationData.is_active) {
-        console.log('🔴 Location inactive, removing user from map')
-        handleUserOffline(locationData.user_id)
+        console.log('🔴 Location marked inactive, updating user status to offline')
+        // Update existing user to show as offline instead of removing them
+        setUsers(currentUsers => {
+          return currentUsers.map(user => {
+            if (user.id === locationData.user_id) {
+              return {
+                ...user,
+                latest_location: {
+                  ...user.latest_location!,
+                  is_active: false,
+                  timestamp: locationData.timestamp
+                }
+              }
+            }
+            return user
+          })
+        })
         return
       }
 
@@ -438,29 +444,19 @@ export default function RealtimeMap() {
     }
   }, [supabase]) // Remove fetchUsersWithLocations to avoid circular dependency
 
-  const handleUserOffline = useCallback((userId: string) => {
-    console.log('🔴 User went offline:', userId)
-    // Remove user from the map immediately
-    setUsers(currentUsers => {
-      const updatedUsers = currentUsers.filter(user => user.id !== userId)
-      console.log('Removed offline user, remaining users:', updatedUsers.length)
-      return updatedUsers
-    })
-  }, []) // Empty dependency array
-
-  // Professional offline detection - mark users offline if no location update in 3 minutes
+  // 1-minute offline detection - mark users offline if no location update in 1 minute
   const markStaleUsersOffline = useCallback(async () => {
     try {
-      const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000).toISOString()
+      const oneMinuteAgo = new Date(Date.now() - 1 * 60 * 1000).toISOString()
       
-      console.log('🔍 Checking for users with stale locations (older than 3 minutes)')
+      console.log('🔍 Checking for users with stale locations (older than 1 minute)')
       
-      // Find users who claim to be active but haven't updated in 3 minutes
+      // Find users who claim to be active but haven't updated in 1 minute
       const { data: staleUsers, error } = await supabase
         .from('user_locations')
         .select('user_id, timestamp')
         .eq('is_active', true)
-        .lt('timestamp', threeMinutesAgo)
+        .lt('timestamp', oneMinuteAgo)
       
       if (error) {
         console.error('Error checking for stale users:', error)
@@ -468,14 +464,14 @@ export default function RealtimeMap() {
       }
       
       if (staleUsers && staleUsers.length > 0) {
-        console.log(`🔴 Found ${staleUsers.length} stale users, marking them offline`)
+        console.log(`🔴 Found ${staleUsers.length} stale users (no update for 1+ minute), marking them offline`)
         
         // Mark them as offline
         const { error: updateError } = await supabase
           .from('user_locations')
           .update({ is_active: false })
           .eq('is_active', true)
-          .lt('timestamp', threeMinutesAgo)
+          .lt('timestamp', oneMinuteAgo)
         
         if (updateError) {
           console.error('Error marking stale users offline:', updateError)

@@ -9,7 +9,7 @@ import { MapMarker } from '@/types'
 import 'leaflet/dist/leaflet.css'
 
 // Map controller component to handle centering and zoom tracking
-function MapController({ markers }: { markers: TrackedMarker[] }) {
+function MapController({ markers }: { markers: MapMarker[] }) {
   const map = useMap()
   const [hasInitialized, setHasInitialized] = useState(false)
   
@@ -57,7 +57,7 @@ function ZoomTracker({ onZoomChange }: { onZoomChange: (zoom: number) => void })
 }
 
 // Custom map controls component
-function MapControls({ markers }: { markers: TrackedMarker[] }) {
+function MapControls({ markers }: { markers: MapMarker[] }) {
   const map = useMap()
   
   const goToLiveLocations = () => {
@@ -220,15 +220,7 @@ interface RealtimeMapClientProps {
   markers: MapMarker[]
 }
 
-// Custom marker tracking for smooth movement
-interface TrackedMarker extends MapMarker {
-  previousPosition?: [number, number]
-  isMoving?: boolean
-  lastMoveTime?: number
-}
-
 export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
-  const [trackedMarkers, setTrackedMarkers] = useState<TrackedMarker[]>([])
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'connecting' | 'disconnected'>('connecting')
   const [currentZoom, setCurrentZoom] = useState<number>(12)
 
@@ -248,25 +240,6 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
 
   useEffect(() => {
     console.log('🗺️ RealtimeMapClient received markers:', markers.length)
-    
-    // Update tracked markers with movement detection
-    setTrackedMarkers(prevTracked => {
-      const now = Date.now()
-      
-      return markers.map(marker => {
-        const existingMarker = prevTracked.find(t => t.id === marker.id)
-        const previousPosition = existingMarker?.position
-        const hasPositionChanged = previousPosition && 
-          (previousPosition[0] !== marker.position[0] || previousPosition[1] !== marker.position[1])
-        
-        return {
-          ...marker,
-          previousPosition: existingMarker?.position,
-          isMoving: hasPositionChanged,
-          lastMoveTime: hasPositionChanged ? now : existingMarker?.lastMoveTime
-        }
-      })
-    })
   }, [markers])
 
   // Default center - Mindoro, Philippines
@@ -324,11 +297,11 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
       scrollWheelZoom={true}
       dragging={true}
     >
-      <MapController markers={trackedMarkers} />
+      <MapController markers={markers} />
       <ZoomTracker onZoomChange={setCurrentZoom} />
-      <MapControls markers={trackedMarkers} />
+      <MapControls markers={markers} />
       
-      {/* Real-time status indicator with movement tracking */}
+      {/* Real-time status indicator */}
       <div className="absolute top-4 right-16 z-50 bg-white bg-opacity-95 px-3 py-2 rounded-lg shadow-md border">
         <div className="flex items-center space-x-2 text-sm">
           <div className={`w-2 h-2 rounded-full ${
@@ -345,60 +318,13 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
              connectionStatus === 'connecting' ? 'Monitoring' :
              'Disconnected'}
           </span>
-          {trackedMarkers.length > 0 && (
-            <>
-              <span className="text-gray-600">
-                • {trackedMarkers.length} user{trackedMarkers.length !== 1 ? 's' : ''}
-              </span>
-              {(() => {
-                const movingCount = trackedMarkers.filter(marker => 
-                  marker.isMoving || (marker.lastMoveTime && (Date.now() - marker.lastMoveTime) < 10000)
-                ).length;
-                return movingCount > 0 ? (
-                  <span className="text-red-600 font-semibold animate-pulse">
-                    • {movingCount} moving
-                  </span>
-                ) : null;
-              })()}
-            </>
+          {markers.length > 0 && (
+            <span className="text-gray-600">
+              • {markers.length} user{markers.length !== 1 ? 's' : ''}
+            </span>
           )}
         </div>
       </div>
-      
-      {/* Movement Activity Panel */}
-      {(() => {
-        const movingUsers = trackedMarkers.filter(marker => 
-          marker.isMoving || (marker.lastMoveTime && (Date.now() - marker.lastMoveTime) < 30000) // Show for 30 seconds
-        );
-        
-        return movingUsers.length > 0 ? (
-          <div className="absolute top-20 right-4 z-50 bg-white bg-opacity-95 px-3 py-2 rounded-lg shadow-md border max-w-xs">
-            <div className="text-sm font-semibold text-red-700 mb-2 flex items-center">
-              🚨 Movement Activity
-            </div>
-            <div className="space-y-1 max-h-32 overflow-y-auto">
-              {movingUsers.map(marker => {
-                const secondsAgo = marker.lastMoveTime ? Math.floor((Date.now() - marker.lastMoveTime) / 1000) : 0;
-                const isCurrentlyMoving = marker.isMoving || secondsAgo < 10;
-                
-                return (
-                  <div key={marker.id} className={`text-xs flex items-center space-x-2 p-1 rounded ${
-                    isCurrentlyMoving ? 'bg-red-100' : 'bg-yellow-100'
-                  }`}>
-                    <span className={`w-2 h-2 rounded-full ${
-                      isCurrentlyMoving ? 'bg-red-500 animate-pulse' : 'bg-yellow-500'
-                    }`}></span>
-                    <span className="font-medium">{marker.user.name}</span>
-                    <span className="text-gray-600">
-                      {isCurrentlyMoving ? 'moving now' : `${secondsAgo}s ago`}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : null;
-      })()}
       
       {/* Zoom level indicator */}
       <div className="absolute bottom-4 right-4 z-50 bg-white bg-opacity-95 px-2 py-1 rounded shadow-md border">
@@ -452,7 +378,7 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
         </LayersControl.BaseLayer>
       </LayersControl>
       
-      {trackedMarkers.map((marker) => {
+      {markers.map((marker) => {
         console.log('🎯 Rendering marker:', marker.id, 'at position:', marker.position, 'is_active:', marker.location.is_active)
         
         // Check both time-based and database-based status
@@ -460,42 +386,19 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
         const isActiveInDB = marker.location.is_active // Check database is_active status
         const isOnline = isRecentTime && isActiveInDB // User is online if both conditions are true
         
-        const isRecentlyMoved = Boolean(marker.isMoving || (marker.lastMoveTime && (Date.now() - marker.lastMoveTime) < 10000)) // 10 seconds
-        
         return (
           <Marker
             key={`${marker.id}-${marker.location.timestamp}`} // Include timestamp to force re-render on location update
             position={marker.position}
-            icon={createUserIcon(isOnline, isRecentlyMoved, currentZoom)}
+            icon={createUserIcon(isOnline, false, currentZoom)}
           >
-            {/* Hover Tooltip with enhanced movement info */}
+            {/* Hover Tooltip */}
             <Tooltip permanent={false} direction="top" offset={[0, -20]}>
               <div className="text-center">
                 <div className="font-semibold">{marker.user.name}</div>
                 <div className="text-xs">
-                  {isRecentlyMoved ? (
-                    <span className="text-red-600 font-bold animate-pulse">
-                      🔴 MOVING NOW!
-                    </span>
-                  ) : isOnline ? (
-                    '🟢 Online'
-                  ) : (
-                    '⚪ Offline'
-                  )}
+                  {isOnline ? '🟢 Online' : '⚪ Offline'}
                 </div>
-                {isRecentlyMoved && marker.previousPosition && (
-                  <div className="text-xs text-red-500 mt-1">
-                    {(() => {
-                      const [prevLat, prevLng] = marker.previousPosition!;
-                      const [currLat, currLng] = marker.position;
-                      const distance = Math.sqrt(
-                        Math.pow((currLat - prevLat) * 111000, 2) + 
-                        Math.pow((currLng - prevLng) * 111000 * Math.cos(currLat * Math.PI / 180), 2)
-                      );
-                      return distance > 1 ? `${Math.round(distance)}m moved` : 'Position updated';
-                    })()}
-                  </div>
-                )}
               </div>
             </Tooltip>
             
@@ -539,70 +442,14 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
                   </p>
                 </div>
                 
-                {marker.isMoving && (
-                  <div className="mb-2 p-2 bg-red-50 rounded border border-red-200">
-                    <p className="text-sm font-medium text-red-700 flex items-center">
-                      🚨 Movement Detected
-                    </p>
-                    <p className="text-xs text-red-600">User is currently moving</p>
-                    {marker.previousPosition && (() => {
-                      const [prevLat, prevLng] = marker.previousPosition;
-                      const [currLat, currLng] = marker.position;
-                      
-                      // Calculate distance moved
-                      const distance = Math.sqrt(
-                        Math.pow((currLat - prevLat) * 111000, 2) + 
-                        Math.pow((currLng - prevLng) * 111000 * Math.cos(currLat * Math.PI / 180), 2)
-                      );
-                      
-                      // Calculate direction
-                      const bearing = Math.atan2(
-                        currLng - prevLng,
-                        currLat - prevLat
-                      ) * 180 / Math.PI;
-                      
-                      const direction = bearing >= -22.5 && bearing < 22.5 ? 'North' :
-                                      bearing >= 22.5 && bearing < 67.5 ? 'Northeast' :
-                                      bearing >= 67.5 && bearing < 112.5 ? 'East' :
-                                      bearing >= 112.5 && bearing < 157.5 ? 'Southeast' :
-                                      bearing >= 157.5 || bearing < -157.5 ? 'South' :
-                                      bearing >= -157.5 && bearing < -112.5 ? 'Southwest' :
-                                      bearing >= -112.5 && bearing < -67.5 ? 'West' : 'Northwest';
-                      
-                      return (
-                        <div className="mt-1 space-y-1">
-                          {distance > 1 && (
-                            <p className="text-xs text-red-600">
-                              Distance: {Math.round(distance)}m
-                            </p>
-                          )}
-                          {distance > 5 && (
-                            <p className="text-xs text-red-600">
-                              Direction: {direction}
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-                
                 <div className="mt-3 pt-2 border-t">
                   <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                    isRecentlyMoved 
-                      ? 'bg-red-100 text-red-800' 
-                      : isOnline 
-                        ? 'bg-green-100 text-green-800' 
-                        : 'bg-gray-100 text-gray-800'
+                    isOnline ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
                   }`}>
                     <div className={`w-2 h-2 rounded-full mr-1 ${
-                      isRecentlyMoved 
-                        ? 'bg-red-400' 
-                        : isOnline 
-                          ? 'bg-green-400' 
-                          : 'bg-gray-400'
+                      isOnline ? 'bg-green-400' : 'bg-gray-400'
                     }`}></div>
-                    {isRecentlyMoved ? 'Moving Now!' : isOnline ? 'Online' : 'Last seen'}
+                    {isOnline ? 'Online' : 'Offline'}
                   </div>
                 </div>
               </div>

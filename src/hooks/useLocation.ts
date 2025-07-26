@@ -21,7 +21,6 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
   // Use ref for retry count to avoid triggering re-renders
   const retryCountRef = useRef(0)
   const lastUpdateRef = useRef(0)
-  const heartbeatRef = useRef<NodeJS.Timeout | null>(null)
   const updateThrottle = 5000 // Only update database every 5 seconds
   
   const supabase = createClient()
@@ -157,7 +156,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     }
   }, [userId, supabase, onLocationUpdate])
 
-  // Mark user as offline when they close the app
+  // Simple mark user as offline when they close the app
   const markUserOffline = useCallback(async () => {
     if (!userId) return
     
@@ -175,48 +174,6 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
       console.error('Failed to mark user offline:', err)
     }
   }, [userId, supabase])
-
-  // Heartbeat to keep user active
-  const startHeartbeat = useCallback(() => {
-    if (!userId) return
-    
-    console.log('💗 Starting heartbeat for user:', userId)
-    
-    // Clear existing heartbeat
-    if (heartbeatRef.current) {
-      clearInterval(heartbeatRef.current)
-    }
-    
-    // Send heartbeat every 60 seconds to keep user active
-    heartbeatRef.current = setInterval(async () => {
-      try {
-        const { error } = await supabase
-          .from('user_locations')
-          .update({ 
-            timestamp: new Date().toISOString(),
-            is_active: true
-          })
-          .eq('user_id', userId)
-          .eq('is_active', true)
-        
-        if (error) {
-          console.error('Heartbeat failed:', error)
-        } else {
-          console.log('💗 Heartbeat sent for user:', userId)
-        }
-      } catch (err) {
-        console.error('Heartbeat failed:', err)
-      }
-    }, 60000) // 60 seconds - professional interval
-  }, [userId, supabase])
-
-  const stopHeartbeat = useCallback(() => {
-    if (heartbeatRef.current) {
-      clearInterval(heartbeatRef.current)
-      heartbeatRef.current = null
-      console.log('💔 Heartbeat stopped')
-    }
-  }, [])
 
   const getCurrentPosition = useCallback(() => {
     if (!navigator.geolocation) {
@@ -307,9 +264,6 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     console.log('Starting location watching for user:', userId)
     setError(null) // Clear any previous errors
     setLoading(true)
-    
-    // Start heartbeat to keep user active
-    startHeartbeat()
 
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
@@ -402,15 +356,13 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
 
     console.log('Watch started with ID:', watchId)
     return watchId
-  }, [userId, enableHighAccuracy, timeout, maximumAge, updateLocationInDB, startHeartbeat])
+  }, [userId, enableHighAccuracy, timeout, maximumAge, updateLocationInDB])
 
   const stopWatching = useCallback((watchId: number) => {
     if (navigator.geolocation) {
       navigator.geolocation.clearWatch(watchId)
     }
-    // Stop heartbeat when watching stops
-    stopHeartbeat()
-  }, [stopHeartbeat])
+  }, [])
 
   const requestPermission = useCallback(async () => {
     return new Promise<boolean>((resolve) => {
@@ -439,22 +391,20 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     checkPermission()
   }, [checkPermission])
 
-  // Add beforeunload event to gracefully handle app closing
+  // Add beforeunload event to mark user offline when they close the app
   useEffect(() => {
     const handleBeforeUnload = () => {
-      // Just stop the heartbeat and let the smart detection system handle offline status
-      // Don't immediately mark offline - user might come back quickly
-      stopHeartbeat()
-      console.log('🔄 Browser closing - heartbeat stopped, offline detection will handle status')
+      // Mark user offline when they close the app
+      markUserOffline()
+      console.log('🔄 Browser closing - marking user offline')
     }
 
     window.addEventListener('beforeunload', handleBeforeUnload)
 
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload)
-      stopHeartbeat() // Clean up heartbeat on unmount
     }
-  }, [stopHeartbeat])
+  }, [markUserOffline])
 
   return {
     position,
