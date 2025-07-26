@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { GeolocationPosition } from '@/types'
 
@@ -17,7 +17,9 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [permission, setPermission] = useState<PermissionState>('prompt')
-  const [retryCount, setRetryCount] = useState(0)
+  
+  // Use ref for retry count to avoid triggering re-renders
+  const retryCountRef = useRef(0)
   
   const supabase = createClient()
   
@@ -182,7 +184,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         console.log('Location updated:', pos.coords.latitude, pos.coords.longitude)
-        setRetryCount(0) // Reset retry count on success
+        retryCountRef.current = 0 // Reset retry count on success
         setLoading(false)
         
         const position: GeolocationPosition = {
@@ -218,20 +220,20 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
           console.warn('Received empty/malformed error object from geolocation API')
           
           // Try to retry a few times for empty errors
-          if (retryCount < 2) {
-            console.log(`Retrying location watch (attempt ${retryCount + 1}/2)...`)
-            setRetryCount(prev => prev + 1)
+          if (retryCountRef.current < 2) {
+            console.log(`Retrying location watch (attempt ${retryCountRef.current + 1}/2)...`)
+            retryCountRef.current += 1
             setTimeout(() => {
               // Just log the retry, don't create infinite recursion
               console.log('Location service retry scheduled')
-            }, 2000 * (retryCount + 1))
+            }, 2000 * retryCountRef.current)
             return
           }
           
           errorMessage = 'Browser location service temporarily unavailable after multiple attempts. This may be due to:'
           setError(errorMessage + '\n• Poor GPS signal\n• Browser location service issues\n• Network connectivity problems\nTry refreshing the page or check your location settings.')
           setLoading(false)
-          setRetryCount(0) // Reset retry count
+          retryCountRef.current = 0 // Reset retry count
           return
         }
         
@@ -313,7 +315,6 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     getCurrentPosition,
     startWatching,
     stopWatching,
-    requestPermission,
-    retryCount // Export retry count for debugging
+    requestPermission
   }
 }

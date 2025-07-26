@@ -32,7 +32,7 @@ export default function AdminDashboard() {
     debounceStatsRef.current = setTimeout(() => {
       setStats(newStats)
       setLastUpdate(new Date())
-    }, 1000) // 1 second debounce for stats
+    }, 2000) // Increased to 2 seconds debounce for stats to reduce flickering
   }, [])
 
   useEffect(() => {
@@ -58,7 +58,7 @@ export default function AdminDashboard() {
           // Add delay to prevent rapid updates
           setTimeout(() => {
             getStats()
-          }, 1000)
+          }, 2000) // Increased delay to reduce flickering
         }
       )
       .on(
@@ -73,7 +73,7 @@ export default function AdminDashboard() {
           // Add delay to prevent rapid updates
           setTimeout(() => {
             getStats()
-          }, 1000)
+          }, 2000) // Increased delay to reduce flickering
         }
       )
       .subscribe((status) => {

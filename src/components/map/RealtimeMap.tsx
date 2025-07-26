@@ -37,24 +37,45 @@ export default function RealtimeMap() {
     debounceUpdateRef.current = setTimeout(() => {
       setUsers(newUsers)
       setLastUpdateTime(Date.now())
-    }, 500) // 500ms debounce
+    }, 1000) // Increased to 1000ms debounce to reduce flickering
   }, []) // Empty dependency array to prevent infinite re-renders
 
+  // Initialize data and subscriptions
   useEffect(() => {
-    fetchUsersWithLocations()
-    const cleanup = setupRealtimeSubscription()
+    let mounted = true
     
-    // Reduce polling frequency to prevent flickering (every 30 seconds instead of 10)
-    const intervalId = setInterval(() => {
-      console.log('🔄 Real-time backup refresh (every 30 seconds)')
-      fetchUsersWithLocations()
-    }, 30000)
+    const initialize = async () => {
+      if (!mounted) return
+      
+      // Initial data fetch
+      const fetchPromise = fetchUsersWithLocations()
+      
+      // Setup real-time subscription
+      const cleanup = setupRealtimeSubscription()
+      
+      await fetchPromise
+      
+      // Reduce polling frequency to prevent flickering (every 30 seconds instead of 10)
+      const intervalId = setInterval(() => {
+        if (!mounted) return
+        console.log('🔄 Real-time backup refresh (every 30 seconds)')
+        fetchUsersWithLocations()
+      }, 30000)
+      
+      return () => {
+        mounted = false
+        if (cleanup) cleanup()
+        clearInterval(intervalId)
+      }
+    }
+    
+    const cleanupPromise = initialize()
     
     return () => {
-      if (cleanup) cleanup()
-      clearInterval(intervalId)
+      mounted = false
+      cleanupPromise.then(cleanup => cleanup && cleanup())
     }
-  }, [supabase])
+  }, []) // Empty dependency array to prevent re-initialization
 
   const fetchUsersWithLocations = useCallback(async () => {
     try {
@@ -192,7 +213,7 @@ export default function RealtimeMap() {
     } finally {
       setLoading(false)
     }
-  }, [supabase, loading, debouncedSetUsers]) // Remove circular dependency
+  }, [supabase, loading]) // Remove debouncedSetUsers to avoid circular dependency
 
   const setupRealtimeSubscription = useCallback(() => {
     console.log('Setting up real-time subscriptions...')
