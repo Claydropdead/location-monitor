@@ -138,37 +138,22 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     }
   }, [userId, supabase, onLocationUpdate])
 
-  // Mark user as offline when they accidentally close the app (keep on map)
+  // Mark user as offline when they close the app
   const markUserOffline = useCallback(async () => {
     if (!userId) return
     
-    console.log('🔴 Marking user offline (accidental disconnect):', userId)
+    console.log('🔴 Marking user offline:', userId)
     try {
       await supabase
         .from('user_locations')
         .update({ 
-          is_active: false, // Keep record but mark as offline
+          is_active: false,
           timestamp: new Date().toISOString()
         })
         .eq('user_id', userId)
         .eq('is_active', true)
     } catch (err) {
       console.error('Failed to mark user offline:', err)
-    }
-  }, [userId, supabase])
-
-  // Remove user completely when they intentionally turn off location or logout
-  const removeUserFromMap = useCallback(async () => {
-    if (!userId) return
-    
-    console.log('🗑️ Removing user from map (intentional disconnect):', userId)
-    try {
-      await supabase
-        .from('user_locations')
-        .delete()
-        .eq('user_id', userId)
-    } catch (err) {
-      console.error('Failed to remove user from map:', err)
     }
   }, [userId, supabase])
 
@@ -396,21 +381,13 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     return watchId
   }, [userId, enableHighAccuracy, timeout, maximumAge, updateLocationInDB, startHeartbeat])
 
-  const stopWatching = useCallback((watchId: number, intentional: boolean = false) => {
+  const stopWatching = useCallback((watchId: number) => {
     if (navigator.geolocation) {
       navigator.geolocation.clearWatch(watchId)
     }
     // Stop heartbeat when watching stops
     stopHeartbeat()
-    
-    // If it's intentional (user clicked stop or logout), remove from map
-    if (intentional) {
-      removeUserFromMap()
-    } else {
-      // If accidental (error, etc.), just mark offline
-      markUserOffline()
-    }
-  }, [stopHeartbeat, removeUserFromMap, markUserOffline])
+  }, [stopHeartbeat])
 
   const requestPermission = useCallback(async () => {
     return new Promise<boolean>((resolve) => {
@@ -442,19 +419,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
   // Add beforeunload event to mark user offline when closing app
   useEffect(() => {
     const handleBeforeUnload = () => {
-      // Use sendBeacon for reliable last-second requests
-      if (userId && navigator.sendBeacon) {
-        const data = JSON.stringify({
-          user_id: userId,
-          is_active: false,
-          timestamp: new Date().toISOString()
-        })
-        
-        // Try to send offline status using sendBeacon (more reliable for page unload)
-        navigator.sendBeacon('/api/mark-offline', data)
-      }
-      
-      // Also try the regular method as fallback
+      // Mark user offline when closing app
       markUserOffline()
       stopHeartbeat()
     }
@@ -492,7 +457,6 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     getCurrentPosition,
     startWatching,
     stopWatching,
-    requestPermission,
-    removeUserFromMap // Export for logout functionality
+    requestPermission
   }
 }

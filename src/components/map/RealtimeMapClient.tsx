@@ -453,15 +453,20 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
       </LayersControl>
       
       {trackedMarkers.map((marker) => {
-        console.log('🎯 Rendering marker:', marker.id, 'at position:', marker.position)
-        const isRecent = new Date(marker.location.timestamp).getTime() > Date.now() - 2 * 60 * 1000 // 2 minutes (reduced from 5)
+        console.log('🎯 Rendering marker:', marker.id, 'at position:', marker.position, 'is_active:', marker.location.is_active)
+        
+        // Check both time-based and database-based status
+        const isRecentTime = new Date(marker.location.timestamp).getTime() > Date.now() - 5 * 60 * 1000 // 5 minutes
+        const isActiveInDB = marker.location.is_active // Check database is_active status
+        const isOnline = isRecentTime && isActiveInDB // User is online if both conditions are true
+        
         const isRecentlyMoved = Boolean(marker.isMoving || (marker.lastMoveTime && (Date.now() - marker.lastMoveTime) < 10000)) // 10 seconds
         
         return (
           <Marker
             key={`${marker.id}-${marker.location.timestamp}`} // Include timestamp to force re-render on location update
             position={marker.position}
-            icon={createUserIcon(isRecent, isRecentlyMoved, currentZoom)}
+            icon={createUserIcon(isOnline, isRecentlyMoved, currentZoom)}
           >
             {/* Hover Tooltip with enhanced movement info */}
             <Tooltip permanent={false} direction="top" offset={[0, -20]}>
@@ -472,7 +477,7 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
                     <span className="text-red-600 font-bold animate-pulse">
                       🔴 MOVING NOW!
                     </span>
-                  ) : isRecent ? (
+                  ) : isOnline ? (
                     '🟢 Online'
                   ) : (
                     '⚪ Offline'
@@ -586,18 +591,18 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
                   <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
                     isRecentlyMoved 
                       ? 'bg-red-100 text-red-800' 
-                      : isRecent 
+                      : isOnline 
                         ? 'bg-green-100 text-green-800' 
                         : 'bg-gray-100 text-gray-800'
                   }`}>
                     <div className={`w-2 h-2 rounded-full mr-1 ${
                       isRecentlyMoved 
                         ? 'bg-red-400' 
-                        : isRecent 
+                        : isOnline 
                           ? 'bg-green-400' 
                           : 'bg-gray-400'
                     }`}></div>
-                    {isRecentlyMoved ? 'Moving Now!' : isRecent ? 'Online' : 'Last seen'}
+                    {isRecentlyMoved ? 'Moving Now!' : isOnline ? 'Online' : 'Last seen'}
                   </div>
                 </div>
               </div>
