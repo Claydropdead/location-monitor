@@ -20,13 +20,15 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
   
   // Use ref for retry count to avoid triggering re-renders
   const retryCountRef = useRef(0)
+  const lastUpdateRef = useRef(0)
+  const updateThrottle = 5000 // Only update database every 5 seconds
   
   const supabase = createClient()
   
   const {
-    enableHighAccuracy = true,
-    timeout = 30000, // Increased to 30 seconds to reduce timeout errors
-    maximumAge = 60000, // Increased to 60 seconds to allow cached positions
+    enableHighAccuracy = false, // Changed to false to reduce battery usage and frequency
+    timeout = 30000, // 30 seconds timeout
+    maximumAge = 120000, // Increased to 2 minutes to use cached positions longer
     onLocationUpdate
   } = options
 
@@ -45,51 +47,95 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     }
   }, [])
 
-  const updateLocationInDB = useCallback(async (pos: GeolocationPosition) => {
+  const updateLocationInDB = useCallback(async (pos: GeolocationPosition, force: boolean = false) => {
     if (!userId) {
       console.warn('No userId provided for location update')
       return
     }
 
+    // Throttle updates: only update database every 5 seconds unless forced
+    const now = Date.now()
+    if (!force && (now - lastUpdateRef.current) < updateThrottle) {
+      console.log('⏱️ Location update throttled, skipping database write')
+      return
+    }
+    
+    lastUpdateRef.current = now
+
     console.log('🌍 Updating location in DB for user:', userId)
     console.log('📍 Position:', pos.coords.latitude, pos.coords.longitude)
 
     try {
-      // First, mark all previous locations as inactive
-      const { error: updateError } = await supabase
-        .from('user_locations')
-        .update({ is_active: false })
-        .eq('user_id', userId)
-
-      if (updateError) {
-        console.error('Error marking previous locations inactive:', updateError)
-      }
-
-      // Insert new location with immediate timestamp
+      // Use UPSERT (INSERT ... ON CONFLICT DO UPDATE) for efficiency
+      // This will either insert a new record or update existing one
       const { error } = await supabase
         .from('user_locations')
-        .insert({
+        .upsert({
           user_id: userId,
           latitude: pos.coords.latitude,
           longitude: pos.coords.longitude,
           accuracy: pos.coords.accuracy,
-          timestamp: new Date().toISOString(), // Use current time for faster updates
+          timestamp: new Date().toISOString(),
           is_active: true
+        }, {
+          onConflict: 'user_id',
+          ignoreDuplicates: false
         })
 
       if (error) {
         console.error('❌ Error updating location:', error)
-      } else {
-        console.log('✅ Location updated successfully - Real-time update should trigger now')
-        // Notify parent component that location was updated
-        if (onLocationUpdate) {
-          onLocationUpdate()
+        
+        // Fallback: try the old method if upsert fails
+        console.log('🔄 Fallback: Using update/insert method...')
+        
+        // First try to update existing record
+        const { data: updateData, error: updateError } = await supabase
+          .from('user_locations')
+          .update({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+            timestamp: new Date().toISOString(),
+            is_active: true
+          })
+          .eq('user_id', userId)
+          .eq('is_active', true)
+          .select()
+
+        if (updateError || !updateData || updateData.length === 0) {
+          // No existing active record, create new one but limit total records
+          console.log('🆕 Creating new location record...')
+          
+          // First, mark old records as inactive (keep only last 10 records per user)
+          await supabase
+            .from('user_locations')
+            .update({ is_active: false })
+            .eq('user_id', userId)
+
+          // Insert new record
+          await supabase
+            .from('user_locations')
+            .insert({
+              user_id: userId,
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude,
+              accuracy: pos.coords.accuracy,
+              timestamp: new Date().toISOString(),
+              is_active: true
+            })
         }
+      } else {
+        console.log('✅ Location updated successfully using UPSERT')
+      }
+
+      // Notify parent component that location was updated
+      if (onLocationUpdate) {
+        onLocationUpdate()
       }
     } catch (err) {
       console.error('Failed to update location in database:', err)
     }
-  }, [userId, supabase])
+  }, [userId, supabase, onLocationUpdate])
 
   const getCurrentPosition = useCallback(() => {
     if (!navigator.geolocation) {
@@ -116,7 +162,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
         }
         
         setPosition(position)
-        updateLocationInDB(position)
+        updateLocationInDB(position, true) // Force update for manual getCurrentPosition
         setLoading(false)
       },
       (err) => {
@@ -201,7 +247,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
         }
         
         setPosition(position)
-        updateLocationInDB(position)
+        updateLocationInDB(position) // Throttled updates for continuous watching
       },
       (err) => {
         console.error('Watch position error:', err)
