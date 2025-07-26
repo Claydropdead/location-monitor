@@ -39,8 +39,38 @@ export default function UserDashboard() {
     onLocationUpdate: () => {
       setLastLocationUpdate(new Date())
       console.log('📍 Location update sent to server')
+      
+      // Auto-enable sharing if user was sharing before and location update happens
+      if (user?.id && !isLocationEnabled) {
+        const wasSharing = localStorage.getItem(`location-sharing-${user.id}`) === 'true'
+        if (wasSharing) {
+          console.log('🔄 Location update detected - auto-enabling sharing button')
+          setIsLocationEnabled(true)
+        }
+      }
     }
   })
+
+  // Immediate location sharing restoration when position is detected
+  useEffect(() => {
+    if (position && user?.id && !isLocationEnabled) {
+      const wasSharing = localStorage.getItem(`location-sharing-${user.id}`) === 'true'
+      if (wasSharing) {
+        console.log('🚀 Position detected + user was sharing - immediately enabling location sharing')
+        setIsLocationEnabled(true)
+        
+        // If no watchId, start watching immediately
+        if (!watchId) {
+          console.log('🔄 Starting location watch immediately')
+          const id = startWatching()
+          if (id) {
+            setWatchId(id)
+            console.log('✅ Location sharing auto-started with watch ID:', id)
+          }
+        }
+      }
+    }
+  }, [position, user?.id, isLocationEnabled, watchId, startWatching])
 
   useEffect(() => {
     getUser()
@@ -130,7 +160,15 @@ export default function UserDashboard() {
             setUser(newProfile)
             if (newProfile) {
               // Quick localStorage check for new profile too
-              getInitialLocationState(newProfile.id)
+              const wasSharing = getInitialLocationState(newProfile.id)
+              
+              // If user was sharing, immediately attempt to resume
+              if (wasSharing) {
+                console.log('🚀 New profile but user was sharing - attempting immediate resume')
+                setTimeout(() => {
+                  resumeLocationSharing()
+                }, 100)
+              }
             }
           }
         }
@@ -142,7 +180,15 @@ export default function UserDashboard() {
         setUser(profile)
         
         // Quick localStorage check to reduce UI delay
-        getInitialLocationState(profile.id)
+        const wasSharing = getInitialLocationState(profile.id)
+        
+        // If user was sharing, immediately attempt to resume
+        if (wasSharing) {
+          console.log('🚀 User was sharing - attempting immediate resume')
+          setTimeout(() => {
+            resumeLocationSharing()
+          }, 100) // Small delay to ensure profile is set
+        }
         
         // Then do full database check
         checkLocationSharingStatus(profile.id)
@@ -249,10 +295,13 @@ export default function UserDashboard() {
       const now = new Date()
       const minutesAgo = (now.getTime() - lastUpdate.getTime()) / (1000 * 60)
       
-      // If we have very recent updates, user is definitely sharing
+      // If we have very recent updates AND user preference, user is definitely sharing
       if (minutesAgo < 2 && !isLocationEnabled) {
-        console.log('🔄 Recent location updates detected but UI shows stopped - correcting state')
-        setIsLocationEnabled(true)
+        const wasSharing = localStorage.getItem(`location-sharing-${user.id}`) === 'true'
+        if (wasSharing) {
+          console.log('🔄 Recent location updates detected + user preference - correcting state')
+          setIsLocationEnabled(true)
+        }
       }
       
     } catch (error) {
@@ -303,14 +352,14 @@ export default function UserDashboard() {
           wasSharing
         })
 
-        // Better UI state detection - check if we have recent location updates
-        // If user has recent location updates, they're likely still sharing
-        if (location.is_active || (wasSharing && minutesDiff < 10)) {
+        // CRITICAL: Only restore if user preference exists in localStorage
+        // Database active state alone is not enough - user must have intended to share
+        if (wasSharing && (location.is_active || minutesDiff < 10)) {
           console.log('✅ Location sharing detected - setting UI state to active')
           setIsLocationEnabled(true)
           
           // If not already watching but should be, start watching
-          if (!watchId && wasSharing) {
+          if (!watchId) {
             console.log('🔄 No watch ID but should be sharing - starting location watch')
             await resumeLocationSharing()
           }
@@ -324,6 +373,15 @@ export default function UserDashboard() {
           console.log('⏰ User was sharing but too long ago (>30 min) - require manual restart')
           setIsLocationEnabled(false)
           // Keep localStorage preference so user knows they had it enabled before
+        } else if (location.is_active && !wasSharing) {
+          // Database shows active but no user preference - clean up stale data
+          console.log('🧹 Found stale active record without user preference - cleaning up')
+          await supabase
+            .from('user_locations')
+            .update({ is_active: false })
+            .eq('user_id', userId)
+            .eq('is_active', true)
+          setIsLocationEnabled(false)
         } else {
           console.log('❌ Location is inactive or too old, not resuming')
           setIsLocationEnabled(false)
@@ -414,21 +472,39 @@ export default function UserDashboard() {
       
       // Mark user as inactive and remove localStorage preference
       if (user) {
-        // When manually turning off, DELETE the location record completely
-        const { error } = await supabase
+        console.log('🔴 Manual stop sharing - cleaning up database and localStorage')
+        
+        // First, mark all records as inactive
+        const { error: updateError } = await supabase
+          .from('user_locations')
+          .update({ is_active: false })
+          .eq('user_id', user.id)
+          .eq('is_active', true)
+        
+        if (updateError) {
+          console.error('Error marking user location inactive:', updateError)
+        } else {
+          console.log('✅ All active location records marked inactive')
+        }
+        
+        // Then delete all records for clean slate
+        const { error: deleteError } = await supabase
           .from('user_locations')
           .delete()
           .eq('user_id', user.id)
         
-        if (error) {
-          console.error('Error deleting user location:', error)
+        if (deleteError) {
+          console.error('Error deleting user location records:', deleteError)
         } else {
-          console.log('🗑️ Location record deleted (manual turn off)')
+          console.log('🗑️ All location records deleted (manual turn off)')
         }
         
         // Remove the sharing preference
         localStorage.removeItem(`location-sharing-${user.id}`)
         console.log('🔴 Location sharing preference removed')
+        
+        // Force refresh to ensure clean state
+        await getOnlineUsersCount()
       }
       
       setIsLocationEnabled(false)
