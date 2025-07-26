@@ -488,15 +488,24 @@ export default function UserDashboard() {
         }
         
         // Then delete all records for clean slate
-        const { error: deleteError } = await supabase
+        console.log('🗑️ Attempting to delete location records for user:', user.id)
+        const { data: deleteResult, error: deleteError } = await supabase
           .from('user_locations')
           .delete()
           .eq('user_id', user.id)
+          .select() // Add select to see what was deleted
         
         if (deleteError) {
-          console.error('Error deleting user location records:', deleteError)
+          console.error('❌ Error deleting user location records:', deleteError)
+          console.error('Delete error details:', {
+            message: deleteError.message,
+            code: deleteError.code,
+            details: deleteError.details,
+            hint: deleteError.hint
+          })
         } else {
-          console.log('🗑️ All location records deleted (manual turn off)')
+          console.log('✅ Location records deleted successfully:', deleteResult)
+          console.log(`🗑️ Deleted ${deleteResult?.length || 0} records (manual turn off)`)
         }
         
         // Remove the sharing preference

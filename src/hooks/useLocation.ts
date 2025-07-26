@@ -66,57 +66,42 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     console.log('📍 Position:', pos.coords.latitude, pos.coords.longitude)
 
     try {
-      // Simple approach: Always insert a new record and mark old ones inactive
-      console.log('🆕 Creating new location record...')
+      // UPSERT approach: Single record per user - insert if doesn't exist, update if exists
+      console.log('🔄 Upserting location record (single record per user)...')
       
-      // First, mark all old records for this user as inactive
-      console.log('🔄 Marking old records inactive for user:', userId)
-      const { error: updateError } = await supabase
+      const { error: upsertError } = await supabase
         .from('user_locations')
-        .update({ is_active: false })
-        .eq('user_id', userId)
-
-      if (updateError) {
-        console.error('❌ Error marking old records inactive:', updateError)
-        // Continue anyway, don't throw - we can still insert new record
-      } else {
-        console.log('✅ Old records marked inactive')
-      }
-
-      // Insert new active record
-      console.log('🆕 Inserting new active record...')
-      const { error: insertError } = await supabase
-        .from('user_locations')
-        .insert({
+        .upsert({
           user_id: userId,
           latitude: pos.coords.latitude,
           longitude: pos.coords.longitude,
           accuracy: pos.coords.accuracy,
           timestamp: new Date().toISOString(),
           is_active: true
+        }, {
+          onConflict: 'user_id' // Update existing record for this user_id
         })
 
-      if (insertError) {
-        console.error('❌ Error inserting location:', insertError)
-        console.error('❌ Insert error details:', {
-          message: insertError.message,
-          code: insertError.code,
-          details: insertError.details,
-          hint: insertError.hint
+      if (upsertError) {
+        console.error('❌ Error upserting location:', upsertError)
+        console.error('❌ Upsert error details:', {
+          message: upsertError.message,
+          code: upsertError.code,
+          details: upsertError.details,
+          hint: upsertError.hint
         })
-        throw insertError
+        throw upsertError
       }
 
-      console.log('✅ Location record created successfully')
+      console.log('✅ Location record upserted successfully (single record per user)')
 
-      // Verify the record was created properly
+      // Verify the record was updated/created properly
       console.log('🔍 Verifying location record...')
       const { data: verification, error: verifyError } = await supabase
         .from('user_locations')
         .select('id, is_active, timestamp')
         .eq('user_id', userId)
         .eq('is_active', true)
-        .order('timestamp', { ascending: false })
         .limit(1)
         .single()
 
