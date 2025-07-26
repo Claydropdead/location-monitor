@@ -376,21 +376,6 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     checkPermission()
   }, [checkPermission])
 
-  // Add beforeunload event to mark user offline when they close the app
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      // Mark user offline when they close the app
-      markUserOffline()
-      console.log('🔄 Browser closing - marking user offline')
-    }
-
-    window.addEventListener('beforeunload', handleBeforeUnload)
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-    }
-  }, [markUserOffline])
-
   return {
     position,
     error,
