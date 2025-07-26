@@ -454,7 +454,7 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
       
       {trackedMarkers.map((marker) => {
         console.log('🎯 Rendering marker:', marker.id, 'at position:', marker.position)
-        const isRecent = new Date(marker.location.timestamp).getTime() > Date.now() - 5 * 60 * 1000 // 5 minutes
+        const isRecent = new Date(marker.location.timestamp).getTime() > Date.now() - 2 * 60 * 1000 // 2 minutes (reduced from 5)
         const isRecentlyMoved = Boolean(marker.isMoving || (marker.lastMoveTime && (Date.now() - marker.lastMoveTime) < 10000)) // 10 seconds
         
         return (

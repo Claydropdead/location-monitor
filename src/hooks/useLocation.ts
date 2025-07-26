@@ -21,6 +21,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
   // Use ref for retry count to avoid triggering re-renders
   const retryCountRef = useRef(0)
   const lastUpdateRef = useRef(0)
+  const heartbeatRef = useRef<NodeJS.Timeout | null>(null)
   const updateThrottle = 5000 // Only update database every 5 seconds
   
   const supabase = createClient()
@@ -137,6 +138,63 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     }
   }, [userId, supabase, onLocationUpdate])
 
+  // Mark user as offline when they close the app
+  const markUserOffline = useCallback(async () => {
+    if (!userId) return
+    
+    console.log('🔴 Marking user offline:', userId)
+    try {
+      await supabase
+        .from('user_locations')
+        .update({ 
+          is_active: false,
+          timestamp: new Date().toISOString()
+        })
+        .eq('user_id', userId)
+        .eq('is_active', true)
+    } catch (err) {
+      console.error('Failed to mark user offline:', err)
+    }
+  }, [userId, supabase])
+
+  // Heartbeat to keep user active
+  const startHeartbeat = useCallback(() => {
+    if (!userId) return
+    
+    console.log('💗 Starting heartbeat for user:', userId)
+    
+    // Clear existing heartbeat
+    if (heartbeatRef.current) {
+      clearInterval(heartbeatRef.current)
+    }
+    
+    // Send heartbeat every 30 seconds to keep user active
+    heartbeatRef.current = setInterval(async () => {
+      try {
+        await supabase
+          .from('user_locations')
+          .update({ 
+            timestamp: new Date().toISOString(),
+            is_active: true
+          })
+          .eq('user_id', userId)
+          .eq('is_active', true)
+        
+        console.log('💗 Heartbeat sent for user:', userId)
+      } catch (err) {
+        console.error('Heartbeat failed:', err)
+      }
+    }, 30000) // 30 seconds
+  }, [userId, supabase])
+
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatRef.current) {
+      clearInterval(heartbeatRef.current)
+      heartbeatRef.current = null
+      console.log('💔 Heartbeat stopped')
+    }
+  }, [])
+
   const getCurrentPosition = useCallback(() => {
     if (!navigator.geolocation) {
       setError('Geolocation is not supported by this browser')
@@ -226,6 +284,9 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     console.log('Starting location watching for user:', userId)
     setError(null) // Clear any previous errors
     setLoading(true)
+    
+    // Start heartbeat to keep user active
+    startHeartbeat()
 
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
@@ -318,13 +379,15 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
 
     console.log('Watch started with ID:', watchId)
     return watchId
-  }, [userId, enableHighAccuracy, timeout, maximumAge, updateLocationInDB])
+  }, [userId, enableHighAccuracy, timeout, maximumAge, updateLocationInDB, startHeartbeat])
 
   const stopWatching = useCallback((watchId: number) => {
     if (navigator.geolocation) {
       navigator.geolocation.clearWatch(watchId)
     }
-  }, [])
+    // Stop heartbeat when watching stops
+    stopHeartbeat()
+  }, [stopHeartbeat])
 
   const requestPermission = useCallback(async () => {
     return new Promise<boolean>((resolve) => {
@@ -352,6 +415,51 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
   useEffect(() => {
     checkPermission()
   }, [checkPermission])
+
+  // Add beforeunload event to mark user offline when closing app
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      // Use sendBeacon for reliable last-second requests
+      if (userId && navigator.sendBeacon) {
+        const data = JSON.stringify({
+          user_id: userId,
+          is_active: false,
+          timestamp: new Date().toISOString()
+        })
+        
+        // Try to send offline status using sendBeacon (more reliable for page unload)
+        navigator.sendBeacon('/api/mark-offline', data)
+      }
+      
+      // Also try the regular method as fallback
+      markUserOffline()
+      stopHeartbeat()
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    window.addEventListener('unload', handleBeforeUnload)
+    
+    // Also handle when the page loses focus (user switches tabs/apps)
+    const handleVisibilityChange = () => {
+      if (document.hidden && userId) {
+        console.log('🔴 Page hidden, marking user offline and stopping heartbeat')
+        markUserOffline()
+        stopHeartbeat()
+      } else if (!document.hidden && userId) {
+        console.log('🟢 Page visible, starting heartbeat')
+        startHeartbeat()
+      }
+    }
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      window.removeEventListener('unload', handleBeforeUnload)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      stopHeartbeat() // Clean up heartbeat on unmount
+    }
+  }, [userId, markUserOffline, stopHeartbeat, startHeartbeat])
 
   return {
     position,
