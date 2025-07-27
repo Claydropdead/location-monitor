@@ -10,7 +10,7 @@ import { useRouter } from 'next/navigation'
 export default function UserDashboard() {
   const [user, setUser] = useState<User | null>(null)
   const [isLocationEnabled, setIsLocationEnabled] = useState(false)
-  const [watchId, setWatchId] = useState<number | null>(null)
+  const [watchId, setWatchId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [onlineUsers, setOnlineUsers] = useState(0)
   const [lastLocationUpdate, setLastLocationUpdate] = useState<Date | null>(null)
@@ -62,11 +62,12 @@ export default function UserDashboard() {
         // If no watchId, start watching immediately
         if (!watchId) {
           console.log('🔄 Starting location watch immediately')
-          const id = startWatching()
-          if (id) {
-            setWatchId(id)
-            console.log('✅ Location sharing auto-started with watch ID:', id)
-          }
+          startWatching().then((id) => {
+            if (id) {
+              setWatchId(id)
+              console.log('✅ Location sharing auto-started with watch ID:', id)
+            }
+          })
         }
       }
     }
@@ -414,20 +415,21 @@ export default function UserDashboard() {
     // Don't wait - try immediately
     if (permission === 'granted') {
       console.log('✅ Permission already granted, starting location watch')
-      const id = startWatching()
-      if (id) {
-        setWatchId(id)
-        console.log('✅ Location sharing resumed with watch ID:', id)
-      } else {
-        console.log('❌ Failed to start location watch')
-        setIsLocationEnabled(false)
-      }
+      startWatching().then((id) => {
+        if (id) {
+          setWatchId(id)
+          console.log('✅ Location sharing resumed with watch ID:', id)
+        } else {
+          console.log('❌ Failed to start location watch')
+          setIsLocationEnabled(false)
+        }
+      })
     } else if (permission === 'prompt') {
       console.log('🔄 Permission prompt, requesting permission')
       try {
         const granted = await requestPermission()
         if (granted) {
-          const id = startWatching()
+          const id = await startWatching()
           if (id) {
             setWatchId(id)
             console.log('✅ Location sharing resumed after permission granted')
@@ -532,7 +534,7 @@ export default function UserDashboard() {
       
       // Start location tracking
       console.log('Starting location tracking...')
-      const id = startWatching()
+      const id = await startWatching()
       if (id) {
         setWatchId(id)
         setIsLocationEnabled(true)

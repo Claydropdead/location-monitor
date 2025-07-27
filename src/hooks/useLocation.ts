@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { GeolocationPosition } from '@/types'
+import { NativeGeolocationService } from '@/lib/native-geolocation'
 
 interface UseLocationOptions {
   enableHighAccuracy?: boolean
@@ -25,27 +26,22 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
   
   const supabase = createClient()
   
+  // Memoize the geolocation service to avoid re-creation on every render
+  const geoService = useMemo(() => new NativeGeolocationService(), [])
+  
   const {
-    enableHighAccuracy = false, // Changed to false to reduce battery usage and frequency
-    timeout = 30000, // 30 seconds timeout
-    maximumAge = 120000, // Increased to 2 minutes to use cached positions longer
     onLocationUpdate
   } = options
 
   const checkPermission = useCallback(async () => {
-    if ('permissions' in navigator) {
-      try {
-        const result = await navigator.permissions.query({ name: 'geolocation' })
-        setPermission(result.state)
-        
-        result.addEventListener('change', () => {
-          setPermission(result.state)
-        })
-      } catch {
-        console.warn('Could not query geolocation permission')
-      }
+    try {
+      const result = await geoService.requestPermissions()
+      setPermission(result.granted ? 'granted' : 'denied')
+    } catch (error) {
+      console.warn('Could not query geolocation permission:', error)
+      setPermission('denied')
     }
-  }, [])
+  }, [geoService])
 
   const updateLocationInDB = useCallback(async (pos: GeolocationPosition, force: boolean = false) => {
     if (!userId) {
@@ -121,13 +117,14 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
       if (onLocationUpdate) {
         onLocationUpdate()
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to update location in database:', err)
+      const errorObj = err as { message?: string, code?: string, details?: unknown, hint?: string }
       console.error('Error details:', {
-        message: err?.message,
-        code: err?.code,
-        details: err?.details,
-        hint: err?.hint,
+        message: errorObj?.message,
+        code: errorObj?.code,
+        details: errorObj?.details,
+        hint: errorObj?.hint,
         userId,
         coords: {
           lat: pos.coords.latitude,
@@ -160,89 +157,53 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     }
   }, [userId, supabase])
 
-  const getCurrentPosition = useCallback(() => {
-    if (!navigator.geolocation) {
-      setError('Geolocation is not supported by this browser')
-      return
-    }
-
+  const getCurrentPosition = useCallback(async () => {
     setLoading(true)
     setError(null)
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const position: GeolocationPosition = {
-          coords: {
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-            accuracy: pos.coords.accuracy,
-            altitude: pos.coords.altitude ?? undefined,
-            altitudeAccuracy: pos.coords.altitudeAccuracy ?? undefined,
-            heading: pos.coords.heading ?? undefined,
-            speed: pos.coords.speed ?? undefined
-          },
-          timestamp: pos.timestamp
-        }
-        
-        setPosition(position)
-        updateLocationInDB(position, true) // Force update for manual getCurrentPosition
-        setLoading(false)
-      },
-      (err) => {
-        console.error('getCurrentPosition error:', err)
-        console.error('Error details:', {
-          code: err?.code,
-          message: err?.message,
-          type: typeof err,
-          keys: Object.keys(err || {}),
-          fullError: JSON.stringify(err)
-        })
-        
-        let errorMessage = 'An error occurred while retrieving location'
-        
-        // Handle empty error objects or malformed errors
-        if (!err || (typeof err === 'object' && Object.keys(err).length === 0)) {
-          errorMessage = 'Browser location service temporarily unavailable. Please check your location settings and try again.'
-          console.warn('Received empty/malformed error object from getCurrentPosition API')
-          setError(errorMessage)
-          setLoading(false)
-          return
-        }
-        
-        if (err && typeof err.code === 'number') {
-          switch (err.code) {
-            case 1: // PERMISSION_DENIED
-              errorMessage = 'Location access denied by user'
-              setPermission('denied')
-              break
-            case 2: // POSITION_UNAVAILABLE
-              errorMessage = 'Location information is unavailable'
-              break
-            case 3: // TIMEOUT
-              errorMessage = 'Location request timed out'
-              break
-            default:
-              errorMessage = `Unknown location error (code: ${err.code})`
-          }
-        } else {
-          errorMessage = 'Browser location service error. Please check your location settings and try again.'
-          console.warn('Received malformed error object from getCurrentPosition')
-        }
-        
-        setError(errorMessage)
-        setLoading(false)
-      },
-      {
-        enableHighAccuracy,
-        timeout,
-        maximumAge
+    try {
+      const pos = await geoService.getCurrentPosition()
+      
+      if (pos) {
+        setPosition(pos)
+        updateLocationInDB(pos, true) // Force update for manual getCurrentPosition
+      } else {
+        setError('Unable to get current position')
       }
-    )
-  }, [enableHighAccuracy, timeout, maximumAge, updateLocationInDB])
+      setLoading(false)
+    } catch (err: unknown) {
+      console.error('getCurrentPosition error:', err)
+      
+      let errorMessage = 'An error occurred while retrieving location'
+      
+      if (err && typeof err === 'object' && 'code' in err) {
+        const errorCode = (err as { code?: number }).code
+        switch (errorCode) {
+          case 1: // PERMISSION_DENIED
+            errorMessage = 'Location access denied by user'
+            setPermission('denied')
+            break
+          case 2: // POSITION_UNAVAILABLE
+            errorMessage = 'Location information is unavailable'
+            break
+          case 3: // TIMEOUT
+            errorMessage = 'Location request timed out'
+            break
+          default:
+            errorMessage = `Unknown location error (code: ${errorCode})`
+        }
+      } else if (err && typeof err === 'object' && 'message' in err) {
+        errorMessage = (err as { message: string }).message
+      }
+      
+      setError(errorMessage)
+      setLoading(false)
+    }
+  }, [geoService, updateLocationInDB])
 
-  const startWatching = useCallback(() => {
-    if (!navigator.geolocation || !userId) {
-      console.warn('Geolocation not available or no userId')
+  const startWatching = useCallback(async () => {
+    if (!userId) {
+      console.warn('No userId provided for location watching')
       return null
     }
 
@@ -250,127 +211,77 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     setError(null) // Clear any previous errors
     setLoading(true)
 
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        console.log('Location updated:', pos.coords.latitude, pos.coords.longitude)
+    try {
+      const watchId = await geoService.startWatching((position: GeolocationPosition) => {
+        console.log('Location updated:', position.coords.latitude, position.coords.longitude)
         retryCountRef.current = 0 // Reset retry count on success
         setLoading(false)
-        
-        const position: GeolocationPosition = {
-          coords: {
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-            accuracy: pos.coords.accuracy,
-            altitude: pos.coords.altitude ?? undefined,
-            altitudeAccuracy: pos.coords.altitudeAccuracy ?? undefined,
-            heading: pos.coords.heading ?? undefined,
-            speed: pos.coords.speed ?? undefined
-          },
-          timestamp: pos.timestamp
-        }
-        
         setPosition(position)
         updateLocationInDB(position) // Throttled updates for continuous watching
-      },
-      (err) => {
-        console.error('Watch position error:', err)
-        console.error('Error details:', {
-          code: err?.code,
-          message: err?.message,
-          type: typeof err,
-          keys: Object.keys(err || {}),
-          fullError: JSON.stringify(err)
-        })
-        
-        let errorMessage = 'Location error: '
-        
-        // Handle empty error objects or malformed errors
-        if (!err || (typeof err === 'object' && Object.keys(err).length === 0)) {
-          console.warn('Received empty/malformed error object from geolocation API')
-          
-          // Try to retry a few times for empty errors
-          if (retryCountRef.current < 2) {
-            console.log(`Retrying location watch (attempt ${retryCountRef.current + 1}/2)...`)
-            retryCountRef.current += 1
-            setTimeout(() => {
-              // Just log the retry, don't create infinite recursion
-              console.log('Location service retry scheduled')
-            }, 2000 * retryCountRef.current)
-            return
-          }
-          
-          errorMessage = 'Browser location service temporarily unavailable after multiple attempts. This may be due to:'
-          setError(errorMessage + '\n• Poor GPS signal\n• Browser location service issues\n• Network connectivity problems\nTry refreshing the page or check your location settings.')
-          setLoading(false)
-          retryCountRef.current = 0 // Reset retry count
-          return
+      })
+
+      console.log('Watch started with ID:', watchId)
+      return watchId
+    } catch (err: unknown) {
+      console.error('Start watching error:', err)
+      
+      let errorMessage = 'Failed to start location monitoring: '
+      
+      if (err && typeof err === 'object' && 'code' in err) {
+        const errorCode = (err as { code?: number }).code
+        switch (errorCode) {
+          case 1: // PERMISSION_DENIED
+            errorMessage += 'Permission denied - Please allow location access'
+            setPermission('denied')
+            break
+          case 2: // POSITION_UNAVAILABLE
+            errorMessage += 'Position unavailable - GPS signal not available'
+            break
+          case 3: // TIMEOUT
+            errorMessage += 'Location request timed out'
+            break
+          default:
+            errorMessage += `Unknown error (code: ${errorCode})`
         }
-        
-        // Check if err has the expected properties
-        if (err && typeof err.code === 'number') {
-          switch (err.code) {
-            case 1: // PERMISSION_DENIED
-              errorMessage += 'Permission denied - Please allow location access in your browser'
-              setPermission('denied')
-              break
-            case 2: // POSITION_UNAVAILABLE
-              errorMessage += 'Position unavailable - GPS signal not available'
-              break
-            case 3: // TIMEOUT
-              errorMessage += 'Location request timed out - Try again or check GPS signal'
-              break
-            default:
-              errorMessage += `Unknown error (code: ${err.code})`
-          }
-        } else if (err && err.message) {
-          errorMessage += err.message
-        } else {
-          // Fallback for any other malformed error
-          errorMessage += 'Browser location service error. Please check your location settings and try again.'
-        }
-        
-        setError(errorMessage)
-        setLoading(false)
-      },
-      {
-        enableHighAccuracy,
-        timeout,
-        maximumAge
+      } else if (err && typeof err === 'object' && 'message' in err) {
+        errorMessage += (err as { message: string }).message
+      } else {
+        errorMessage += 'Please check your location settings and try again.'
       }
-    )
-
-    console.log('Watch started with ID:', watchId)
-    return watchId
-  }, [userId, enableHighAccuracy, timeout, maximumAge, updateLocationInDB])
-
-  const stopWatching = useCallback((watchId: number) => {
-    if (navigator.geolocation) {
-      navigator.geolocation.clearWatch(watchId)
+      
+      setError(errorMessage)
+      setLoading(false)
+      return null
     }
-  }, [])
+  }, [userId, geoService, updateLocationInDB])
+
+  const stopWatching = useCallback(async (watchId?: string | null) => {
+    if (watchId) {
+      // If a specific watch ID is provided, we can't stop it with our service
+      // since it manages its own watch ID internally
+      console.warn('Cannot stop specific watch ID with native service')
+    }
+    
+    try {
+      await geoService.stopWatching()
+      console.log('Location watching stopped')
+    } catch (error) {
+      console.error('Error stopping location watch:', error)
+    }
+  }, [geoService])
 
   const requestPermission = useCallback(async () => {
-    return new Promise<boolean>((resolve) => {
-      if (!navigator.geolocation) {
-        resolve(false)
-        return
-      }
-
-      navigator.geolocation.getCurrentPosition(
-        () => {
-          setPermission('granted')
-          resolve(true)
-        },
-        (err) => {
-          if (err.code === err.PERMISSION_DENIED) {
-            setPermission('denied')
-          }
-          resolve(false)
-        },
-        { timeout: 5000 }
-      )
-    })
-  }, [])
+    try {
+      const result = await geoService.requestPermissions()
+      const granted = result.granted
+      setPermission(granted ? 'granted' : 'denied')
+      return granted
+    } catch (error) {
+      console.error('Error requesting permissions:', error)
+      setPermission('denied')
+      return false
+    }
+  }, [geoService])
 
   useEffect(() => {
     checkPermission()
