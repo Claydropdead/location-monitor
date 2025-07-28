@@ -6,6 +6,8 @@ import { useLocation } from '@/hooks/useLocation'
 import { User } from '@/types'
 import { MapPin, Users, Clock, Signal, LogOut } from 'lucide-react'
 import { useRouter } from 'next/navigation'
+import LocationServiceBridge from '@/lib/location-service-bridge'
+import { Capacitor } from '@capacitor/core'
 
 export default function UserDashboard() {
   const [user, setUser] = useState<User | null>(null)
@@ -17,6 +19,37 @@ export default function UserDashboard() {
   
   const supabase = createClient()
   const router = useRouter()
+
+  // Check Android service state
+  const checkAndroidServiceState = useCallback(async () => {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const result = await LocationServiceBridge.getLocationSharingState()
+        console.log('🤖 Android service state:', result.isSharing)
+        
+        if (result.isSharing !== isLocationEnabled) {
+          console.log(`🔄 Syncing state: ${isLocationEnabled} -> ${result.isSharing}`)
+          setIsLocationEnabled(result.isSharing)
+          
+          // Update localStorage to match
+          if (user?.id) {
+            localStorage.setItem(`location-sharing-${user.id}`, result.isSharing.toString())
+          }
+        }
+      } catch (error) {
+        console.warn('Unable to check Android service state:', error)
+      }
+    }
+  }, [isLocationEnabled, user?.id])
+
+  // Sync with Android service state every 2 seconds
+  useEffect(() => {
+    if (user?.id && Capacitor.isNativePlatform()) {
+      checkAndroidServiceState()
+      const interval = setInterval(checkAndroidServiceState, 2000)
+      return () => clearInterval(interval)
+    }
+  }, [user?.id, checkAndroidServiceState])
 
   // Quick localStorage check to reduce UI delay
   const getInitialLocationState = useCallback((userId: string) => {
@@ -113,6 +146,37 @@ export default function UserDashboard() {
       // clearInterval(syncInterval) // DISABLED
     }
   }, [supabase, user?.id])
+
+  // Add visibility change handler to maintain background location tracking
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        console.log('🌙 App went to background - ensuring location tracking continues')
+        // App went to background - ensure location sharing stays active
+        if (isLocationEnabled && user?.id) {
+          console.log('📍 Background mode: Location sharing is active, maintaining tracking')
+        }
+      } else {
+        console.log('☀️ App came to foreground - location tracking active')
+        // App came to foreground - refresh status if needed
+        if (isLocationEnabled && user?.id && !watchId) {
+          console.log('🔄 Foreground restore: Restarting location sharing if needed')
+          startWatching().then((id) => {
+            if (id) {
+              setWatchId(id)
+              console.log('✅ Location sharing restored with watch ID:', id)
+            }
+          })
+        }
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [isLocationEnabled, user?.id, watchId, startWatching])
 
   const getUser = async () => {
     try {

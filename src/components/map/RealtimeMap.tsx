@@ -55,12 +55,12 @@ export default function RealtimeMap() {
       
       await fetchPromise
       
-      // 1-minute offline detection: Check every 30 seconds for users without updates in 1 minute
+      // 5-minute offline detection: Check every 2 minutes for users without updates in 5 minutes
       const offlineDetectionInterval = setInterval(() => {
         if (!mounted) return
-        console.log('🔍 Checking for users offline for more than 1 minute')
+        console.log('🔍 Checking for users offline for more than 5 minutes')
         markStaleUsersOffline()
-      }, 30000) // Check every 30 seconds
+      }, 2 * 60 * 1000) // Check every 2 minutes
       
       // Simple backup refresh every 30 seconds
       const intervalId = setInterval(() => {
@@ -444,19 +444,19 @@ export default function RealtimeMap() {
     }
   }, [supabase]) // Remove fetchUsersWithLocations to avoid circular dependency
 
-  // 1-minute offline detection - mark users offline if no location update in 1 minute
+  // 5-minute offline detection - mark users offline if no location update in 5 minutes
   const markStaleUsersOffline = useCallback(async () => {
     try {
-      const oneMinuteAgo = new Date(Date.now() - 1 * 60 * 1000).toISOString()
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
       
-      console.log('🔍 Checking for users with stale locations (older than 1 minute)')
+      console.log('🔍 Checking for users with stale locations (older than 5 minutes)')
       
-      // Find users who claim to be active but haven't updated in 1 minute
+      // Find users who claim to be active but haven't updated in 5 minutes
       const { data: staleUsers, error } = await supabase
         .from('user_locations')
         .select('user_id, timestamp')
         .eq('is_active', true)
-        .lt('timestamp', oneMinuteAgo)
+        .lt('timestamp', fiveMinutesAgo)
       
       if (error) {
         console.error('Error checking for stale users:', error)
@@ -464,14 +464,14 @@ export default function RealtimeMap() {
       }
       
       if (staleUsers && staleUsers.length > 0) {
-        console.log(`🔴 Found ${staleUsers.length} stale users (no update for 1+ minute), marking them offline`)
+        console.log(`🔴 Found ${staleUsers.length} stale users (no update for 5+ minutes), marking them offline`)
         
         // Mark them as offline
         const { error: updateError } = await supabase
           .from('user_locations')
           .update({ is_active: false })
           .eq('is_active', true)
-          .lt('timestamp', oneMinuteAgo)
+          .lt('timestamp', fiveMinutesAgo)
         
         if (updateError) {
           console.error('Error marking stale users offline:', updateError)

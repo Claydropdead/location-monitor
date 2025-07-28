@@ -2,15 +2,29 @@
 
 import { Geolocation } from '@capacitor/geolocation'
 import { Capacitor } from '@capacitor/core'
-import { GeolocationPosition } from '@/types'
+import type { GeolocationPosition } from '@/types'
 
 export class NativeGeolocationService {
   private watchId: string | null = null
   private onLocationUpdate: ((position: GeolocationPosition) => void) | null = null
 
+  constructor() {
+    // Add visibility change handler for mobile apps
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', this.handleVisibilityChange)
+    }
+  }
+
+  private handleVisibilityChange = () => {
+    if (document.hidden) {
+      console.log('🌙 App backgrounded - Android service continues tracking')
+    } else {
+      console.log('☀️ App foregrounded - syncing with Android service')
+    }
+  }
+
   async requestPermissions() {
     if (!Capacitor.isNativePlatform()) {
-      // For web, we use the existing permission system
       return { granted: true }
     }
 
@@ -28,14 +42,27 @@ export class NativeGeolocationService {
     this.onLocationUpdate = callback
 
     if (Capacitor.isNativePlatform()) {
-      console.log('Starting native geolocation watch...')
+      console.log('🚀 Starting location tracking with Android foreground service...')
       
       try {
+        // Request location permissions FIRST
+        const permissions = await Geolocation.requestPermissions()
+        
+        if (permissions.location !== 'granted') {
+          throw new Error('Location permission denied')
+        }
+
+        // For Android, we start the foreground service with MediaStyle notification
+        // This is handled by the Android LocationTrackingService which runs independently
+        console.log('✅ Location permissions granted - Android service will start automatically')
+        
+        // Use standard Capacitor geolocation for web app updates
+        // The Android service handles its own location tracking and database updates
         this.watchId = await Geolocation.watchPosition(
           {
             enableHighAccuracy: true,
-            timeout: 15000,
-            maximumAge: 3000
+            timeout: 10000,
+            maximumAge: 5000
           },
           (position, err) => {
             if (err) {
@@ -44,7 +71,6 @@ export class NativeGeolocationService {
             }
             
             if (position && this.onLocationUpdate) {
-              // Convert Capacitor position to our GeolocationPosition type
               const convertedPosition: GeolocationPosition = {
                 coords: {
                   latitude: position.coords.latitude,
@@ -58,25 +84,24 @@ export class NativeGeolocationService {
                 timestamp: position.timestamp
               }
               
-              console.log('Native location update:', convertedPosition.coords.latitude, convertedPosition.coords.longitude)
+              console.log('📍 Location update:', convertedPosition.coords.latitude, convertedPosition.coords.longitude)
               this.onLocationUpdate(convertedPosition)
             }
           }
         )
         
-        console.log('Native geolocation watch started with ID:', this.watchId)
+        console.log('✅ Web app location tracking started (Android service handles background)')
         return this.watchId
       } catch (error) {
-        console.error('Error starting native geolocation watch:', error)
-        return null
+        console.error('❌ Error starting location tracking:', error)
+        throw error
       }
     } else {
       // Fallback to web geolocation
       console.log('Starting web geolocation watch...')
       
       if (!navigator.geolocation) {
-        console.error('Geolocation not supported')
-        return null
+        throw new Error('Geolocation not supported')
       }
 
       const watchId = navigator.geolocation.watchPosition(
@@ -104,11 +129,11 @@ export class NativeGeolocationService {
         },
         {
           enableHighAccuracy: true,
-          timeout: 15000,
-          maximumAge: 3000
+          timeout: 30000,
+          maximumAge: 10000
         }
       )
-      
+
       this.watchId = watchId.toString()
       console.log('Web geolocation watch started with ID:', this.watchId)
       return this.watchId
@@ -119,16 +144,18 @@ export class NativeGeolocationService {
     if (this.watchId) {
       if (Capacitor.isNativePlatform()) {
         try {
+          // Stop standard geolocation (Android service continues independently)
           await Geolocation.clearWatch({ id: this.watchId })
-          console.log('Native geolocation watch stopped')
+          console.log('✅ Web app location tracking stopped (Android service continues)')
         } catch (error) {
-          console.error('Error stopping native geolocation watch:', error)
+          console.error('❌ Error stopping location tracking:', error)
         }
       } else {
         navigator.geolocation.clearWatch(parseInt(this.watchId))
         console.log('Web geolocation watch stopped')
       }
       this.watchId = null
+      this.onLocationUpdate = null
     }
   }
 
@@ -169,13 +196,11 @@ export class NativeGeolocationService {
                 timestamp: position.timestamp
               })
             },
-            (error) => {
-              console.error('Error getting current position:', error)
-              reject(error)
-            },
+            (error) => reject(error),
             {
               enableHighAccuracy: true,
-              timeout: 15000
+              timeout: 15000,
+              maximumAge: 3000
             }
           )
         })
@@ -191,4 +216,5 @@ export class NativeGeolocationService {
   }
 }
 
-export const nativeGeolocation = new NativeGeolocationService()
+const nativeGeolocationService = new NativeGeolocationService()
+export default nativeGeolocationService
