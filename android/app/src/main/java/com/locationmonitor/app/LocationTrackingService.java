@@ -43,6 +43,8 @@ public class LocationTrackingService extends Service {
     public void onCreate() {
         super.onCreate();
         
+        android.util.Log.d("LocationTrackingService", "📱 SERVICE CREATED - Initializing components...");
+        
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
         notificationManager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         supabaseClient = new SupabaseClient(this);
@@ -50,43 +52,83 @@ public class LocationTrackingService extends Service {
         
         createNotificationChannel();
         setupLocationCallback();
+        
+        android.util.Log.d("LocationTrackingService", "✅ SERVICE INITIALIZATION COMPLETE");
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null && intent.getAction() != null) {
-            switch (intent.getAction()) {
-                case ACTION_PLAY_PAUSE:
-                    toggleTracking();
-                    break;
-                case ACTION_STOP:
-                    stopLocationTracking();
-                    stopSelf();
-                    return START_NOT_STICKY;
-            }
-        } else {
-            // Default behavior: start tracking
-            startLocationTracking();
-        }
+        android.util.Log.d("LocationTrackingService", "🚀 SERVICE START COMMAND RECEIVED");
         
-        startForeground(NOTIFICATION_ID, createNotification());
-        return START_STICKY;
+        try {
+            // CRITICAL: Start foreground immediately for Android 8+ compatibility
+            android.util.Log.d("LocationTrackingService", "🔔 STARTING FOREGROUND SERVICE WITH NOTIFICATION");
+            
+            Notification notification = createNotification();
+            if (notification == null) {
+                android.util.Log.e("LocationTrackingService", "❌ NOTIFICATION IS NULL - Cannot start foreground service!");
+                return START_NOT_STICKY;
+            }
+            
+            startForeground(NOTIFICATION_ID, notification);
+            android.util.Log.d("LocationTrackingService", "✅ FOREGROUND SERVICE STARTED - NOTIFICATION SHOULD BE VISIBLE!");
+            
+            if (intent != null && intent.getAction() != null) {
+                android.util.Log.d("LocationTrackingService", "🎵 Action received: " + intent.getAction());
+                switch (intent.getAction()) {
+                    case ACTION_PLAY_PAUSE:
+                        toggleTracking();
+                        break;
+                    case ACTION_STOP:
+                        stopLocationTracking();
+                        stopSelf();
+                        return START_NOT_STICKY;
+                }
+            } else {
+                android.util.Log.d("LocationTrackingService", "🎯 Starting location tracking (default behavior)");
+                // Default behavior: start tracking
+                startLocationTracking();
+            }
+            
+            return START_STICKY;
+        } catch (Exception e) {
+            android.util.Log.e("LocationTrackingService", "❌ FAILED TO START FOREGROUND SERVICE: " + e.getMessage());
+            e.printStackTrace();
+            return START_NOT_STICKY;
+        }
     }
 
     private void createNotificationChannel() {
+        android.util.Log.d("LocationTrackingService", "🔔 Creating notification channel...");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
                 "Location Tracking",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             );
             channel.setDescription("Tracks your location in the background");
-            channel.setShowBadge(false);
+            channel.setShowBadge(true);
+            channel.enableLights(false);
+            channel.enableVibration(false);
+            channel.setSound(null, null);  // Silent notification
             notificationManager.createNotificationChannel(channel);
+            android.util.Log.d("LocationTrackingService", "✅ Notification channel created for Android 8+");
+        } else {
+            android.util.Log.d("LocationTrackingService", "✅ Notification channel not needed (Android 7-)");
         }
     }
 
     private Notification createNotification() {
+        android.util.Log.d("LocationTrackingService", "🔔 Creating MediaStyle notification...");
+        
+        // Intent to open the app when notification is tapped
+        Intent appIntent = new Intent(this, MainActivity.class);
+        appIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent appPendingIntent = PendingIntent.getActivity(
+            this, 0, appIntent, 
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        
         Intent playPauseIntent = new Intent(this, LocationTrackingService.class);
         playPauseIntent.setAction(ACTION_PLAY_PAUSE);
         PendingIntent playPausePendingIntent = PendingIntent.getService(
@@ -105,11 +147,17 @@ public class LocationTrackingService extends Service {
         int playPauseIcon = isTracking ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play;
         String playPauseText = isTracking ? "Pause" : "Play";
 
+        android.util.Log.d("LocationTrackingService", "📱 Notification status: " + statusText);
+        android.util.Log.d("LocationTrackingService", "🎵 Creating MediaStyle notification with play/pause controls");
+
         return new NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Location Monitor")
             .setContentText(statusText)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setContentIntent(appPendingIntent)  // Tap notification to open app
             .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)  // Higher priority
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setStyle(new MediaStyle()
                 .setShowActionsInCompactView(0, 1))
             .addAction(playPauseIcon, playPauseText, playPausePendingIntent)
