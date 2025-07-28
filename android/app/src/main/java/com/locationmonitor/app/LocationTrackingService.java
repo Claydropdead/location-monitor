@@ -14,6 +14,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import androidx.annotation.Nullable;
 import androidx.core.app.ActivityCompat;
 import androidx.core.app.NotificationCompat;
@@ -38,6 +39,7 @@ public class LocationTrackingService extends Service {
     private boolean isTracking = false;
     private NotificationManager notificationManager;
     private SupabaseClient supabaseClient;
+    private PowerManager.WakeLock wakeLock;
 
     @Override
     public void onCreate() {
@@ -48,6 +50,12 @@ public class LocationTrackingService extends Service {
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
         notificationManager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         supabaseClient = new SupabaseClient(this);
+        
+        // Acquire wake lock to prevent device from sleeping
+        PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LocationMonitor::LocationWakeLock");
+        wakeLock.acquire(60*60*1000L /*60 minutes*/);
+        
         handler = new Handler(Looper.getMainLooper());
         
         createNotificationChannel();
@@ -193,10 +201,12 @@ public class LocationTrackingService extends Service {
             SharedPreferences prefs = getSharedPreferences("location_sharing", MODE_PRIVATE);
             prefs.edit().putBoolean("is_sharing", true).apply();
             
-            // Create location request for 5-second intervals
+            // Create location request for 5-second intervals with more aggressive settings
             LocationRequest locationRequest = new LocationRequest.Builder(
                 Priority.PRIORITY_HIGH_ACCURACY, 5000) // 5 seconds
-                .setMinUpdateIntervalMillis(5000)
+                .setMinUpdateIntervalMillis(2000) // Allow updates as fast as 2 seconds
+                .setMaxUpdateDelayMillis(10000) // Maximum delay 10 seconds
+                .setWaitForAccurateLocation(false) // Don't wait for high accuracy
                 .build();
 
             fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper());
@@ -235,6 +245,12 @@ public class LocationTrackingService extends Service {
     public void onDestroy() {
         super.onDestroy();
         stopLocationTracking();
+        
+        // Release wake lock
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+        }
+        
         if (handler != null && locationRunnable != null) {
             handler.removeCallbacks(locationRunnable);
         }

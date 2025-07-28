@@ -115,4 +115,26 @@ public class LocationServiceBridge extends Plugin {
             call.reject("Failed to stop location service: " + e.getMessage());
         }
     }
+    
+    @PluginMethod
+    public void isLocationSharing(PluginCall call) {
+        try {
+            android.util.Log.d("LocationServiceBridge", "🔍 Checking location sharing status...");
+            
+            SharedPreferences prefs = getContext().getSharedPreferences("location_sharing", getContext().MODE_PRIVATE);
+            boolean isSharing = prefs.getBoolean("is_sharing", false);
+            boolean serviceRunning = isServiceRunning();
+            
+            android.util.Log.d("LocationServiceBridge", "📊 Sharing state - Prefs: " + isSharing + ", Service: " + serviceRunning);
+            
+            JSObject result = new JSObject();
+            result.put("isSharing", isSharing && serviceRunning);
+            result.put("serviceRunning", serviceRunning);
+            call.resolve(result);
+            
+        } catch (Exception e) {
+            android.util.Log.e("LocationServiceBridge", "❌ Failed to check sharing status: " + e.getMessage());
+            call.reject("Failed to check sharing status: " + e.getMessage());
+        }
+    }
 }
