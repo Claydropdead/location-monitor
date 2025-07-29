@@ -62,6 +62,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
 
     console.log('🌍 Updating location in DB for user:', userId)
     console.log('📍 Position:', pos.coords.latitude, pos.coords.longitude)
+    console.log('🎯 Accuracy:', pos.coords.accuracy ? `±${Math.round(pos.coords.accuracy)}m` : 'Unknown')
 
     try {
       // UPSERT approach: Single record per user - insert if doesn't exist, update if exists
@@ -229,6 +230,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
                 requestPermissions?: boolean;
                 stale?: boolean;
                 distanceFilter?: number;
+                enableHighAccuracy?: boolean;
               },
               callback: (
                 location?: { latitude: number; longitude: number; accuracy?: number; altitude?: number; altitudeAccuracy?: number; bearing?: number; speed?: number; time?: number },
@@ -251,7 +253,8 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
               backgroundTitle: "Location Tracking Active", 
               requestPermissions: true,
               stale: false,
-              distanceFilter: 5  // Trigger on 5 meter movement for real location changes
+              distanceFilter: 3,  // Reduced to 3 meters for higher sensitivity to movement
+              enableHighAccuracy: true  // Force high accuracy GPS mode
             },
             (location?: { latitude: number; longitude: number; accuracy?: number; altitude?: number; altitudeAccuracy?: number; bearing?: number; speed?: number; time?: number }, error?: { message: string; code?: string }) => {
               if (error) {
@@ -262,6 +265,15 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
 
               if (location) {
                 console.log('📍 Background location update (movement-based):', location.latitude, location.longitude)
+                console.log('🎯 Location accuracy:', location.accuracy ? `±${Math.round(location.accuracy)}m` : 'Unknown')
+                
+                // Only process locations with reasonable accuracy (within 50 meters)
+                const accuracy = location.accuracy || 999
+                if (accuracy > 50) {
+                  console.warn('⚠️ Location accuracy too low:', `±${Math.round(accuracy)}m - skipping update`)
+                  return
+                }
+                
                 lastLocationTime = Date.now()
                 
                 const position: GeolocationPosition = {
@@ -295,10 +307,20 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
                 // Get current position using regular geolocation for timer updates
                 const position = await geoService.getCurrentPosition()
                 if (position) {
-                  currentPosition = position
-                  setPosition(position)
-                  updateLocationInDB(position)
-                  lastLocationTime = now
+                  console.log('🎯 Timer location accuracy:', position.coords.accuracy ? `±${Math.round(position.coords.accuracy)}m` : 'Unknown')
+                  
+                  // Only process locations with reasonable accuracy (within 50 meters)
+                  const accuracy = position.coords.accuracy || 999
+                  if (accuracy > 50) {
+                    console.warn('⚠️ Timer location accuracy too low:', `±${Math.round(accuracy)}m - using cached position instead`)
+                    // Fall through to use cached position
+                  } else {
+                    currentPosition = position
+                    setPosition(position)
+                    updateLocationInDB(position)
+                    lastLocationTime = now
+                    return  // Successfully got accurate position, exit early
+                  }
                 }
               } catch (error) {
                 console.warn('Timer location update failed:', error)

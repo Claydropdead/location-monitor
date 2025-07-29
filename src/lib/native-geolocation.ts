@@ -81,8 +81,8 @@ export class NativeGeolocationService {
         (error) => console.error('❌ Web geolocation error:', error),
         {
           enableHighAccuracy: true,
-          timeout: 10000,
-          maximumAge: 5000
+          timeout: 15000,      // Increased timeout for more accurate reading
+          maximumAge: 0        // Don't use cached location, get fresh GPS reading
         }
       )
       return 'web-geolocation-active'
@@ -92,18 +92,26 @@ export class NativeGeolocationService {
 
   async getCurrentPosition(): Promise<GeolocationPosition> {
     if (Capacitor.isNativePlatform()) {
-      // Use Capacitor Geolocation plugin for current position
+      // Use Capacitor Geolocation plugin for current position with high accuracy
       try {
         const { Geolocation } = await import('@capacitor/geolocation')
-        const coordinates = await Geolocation.getCurrentPosition()
+        const coordinates = await Geolocation.getCurrentPosition({
+          enableHighAccuracy: true,
+          timeout: 15000,  // Increased timeout for more accurate reading
+          maximumAge: 0    // Don't use cached location, get fresh GPS reading
+        })
         
         return {
           coords: {
             latitude: coordinates.coords.latitude,
             longitude: coordinates.coords.longitude,
-            accuracy: coordinates.coords.accuracy
+            accuracy: coordinates.coords.accuracy,
+            altitude: coordinates.coords.altitude ?? undefined,
+            altitudeAccuracy: coordinates.coords.altitudeAccuracy ?? undefined,
+            heading: coordinates.coords.heading ?? undefined,
+            speed: coordinates.coords.speed ?? undefined
           },
-          timestamp: Date.now()
+          timestamp: coordinates.timestamp || Date.now()
         }
       } catch (error) {
         console.error('❌ Capacitor geolocation getCurrentPosition failed:', error)
@@ -122,7 +130,11 @@ export class NativeGeolocationService {
             timestamp: Date.now()
           }),
           reject,
-          { enableHighAccuracy: true, timeout: 10000 }
+          { 
+            enableHighAccuracy: true, 
+            timeout: 15000,     // Increased timeout for more accurate reading
+            maximumAge: 0       // Don't use cached location, get fresh GPS reading
+          }
         )
       })
     }
