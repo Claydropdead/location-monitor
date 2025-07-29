@@ -1,11 +1,10 @@
 'use client'
 
-import { Geolocation } from '@capacitor/geolocation'
 import { Capacitor } from '@capacitor/core'
 import type { GeolocationPosition } from '@/types'
+import { backgroundGeolocation } from './background-geolocation'
 
 export class NativeGeolocationService {
-  private watchId: string | null = null
   private onLocationUpdate: ((position: GeolocationPosition) => void) | null = null
 
   constructor() {
@@ -17,197 +16,124 @@ export class NativeGeolocationService {
 
   private handleVisibilityChange = () => {
     if (document.hidden) {
-      console.log('🌙 App backgrounded - Android service continues tracking')
+      console.log('🌙 App backgrounded - Background Geolocation continues tracking')
     } else {
-      console.log('☀️ App foregrounded - syncing with Android service')
+      console.log('☀️ App foregrounded - Background Geolocation still active')
     }
   }
 
   async requestPermissions() {
-    if (!Capacitor.isNativePlatform()) {
-      return { granted: true }
-    }
-
-    try {
-      const permissions = await Geolocation.requestPermissions()
-      console.log('Native permissions:', permissions)
-      return { granted: permissions.location === 'granted' }
-    } catch (error) {
-      console.error('Error requesting permissions:', error)
+    if (Capacitor.isNativePlatform()) {
+      console.log('📱 Using Capacitor Background Geolocation for permissions')
+      try {
+        // Initialize background geolocation which handles permissions
+        await backgroundGeolocation.initialize()
+        return { granted: true }
+      } catch (error) {
+        console.error('❌ Failed to request permissions:', error)
+        return { granted: false }
+      }
+    } else {
+      // Web fallback
+      if ('geolocation' in navigator) {
+        return { granted: true }
+      }
       return { granted: false }
     }
   }
 
   async startWatching(callback: (position: GeolocationPosition) => void) {
     this.onLocationUpdate = callback
-
+    
     if (Capacitor.isNativePlatform()) {
-      console.log('🚀 Starting location tracking with Android foreground service...')
-      
+      console.log('🚀 Starting background geolocation tracking...')
       try {
-        // Request location permissions FIRST
-        const permissions = await Geolocation.requestPermissions()
+        await backgroundGeolocation.startTracking()
         
-        if (permissions.location !== 'granted') {
-          throw new Error('Location permission denied')
-        }
-
-        // For Android, we start the foreground service with MediaStyle notification
-        // This is handled by the Android LocationTrackingService which runs independently
-        console.log('✅ Location permissions granted - Android service will start automatically')
-        
-        // Use standard Capacitor geolocation for web app updates
-        // The Android service handles its own location tracking and database updates
-        this.watchId = await Geolocation.watchPosition(
-          {
-            enableHighAccuracy: true,
-            timeout: 10000,
-            maximumAge: 5000
-          },
-          (position, err) => {
-            if (err) {
-              console.error('Native geolocation error:', err)
-              return
-            }
-            
-            if (position && this.onLocationUpdate) {
-              const convertedPosition: GeolocationPosition = {
-                coords: {
-                  latitude: position.coords.latitude,
-                  longitude: position.coords.longitude,
-                  accuracy: position.coords.accuracy,
-                  altitude: position.coords.altitude || undefined,
-                  altitudeAccuracy: position.coords.altitudeAccuracy || undefined,
-                  heading: position.coords.heading || undefined,
-                  speed: position.coords.speed || undefined
-                },
-                timestamp: position.timestamp
-              }
-              
-              console.log('📍 Location update:', convertedPosition.coords.latitude, convertedPosition.coords.longitude)
-              this.onLocationUpdate(convertedPosition)
-            }
-          }
-        )
-        
-        console.log('✅ Web app location tracking started (Android service handles background)')
-        return this.watchId
+        // Return a watch ID for compatibility
+        return 'background-geolocation-active'
       } catch (error) {
-        console.error('❌ Error starting location tracking:', error)
+        console.error('❌ Failed to start background tracking:', error)
         throw error
       }
     } else {
-      // Fallback to web geolocation
-      console.log('Starting web geolocation watch...')
-      
-      if (!navigator.geolocation) {
-        throw new Error('Geolocation not supported')
-      }
-
-      const watchId = navigator.geolocation.watchPosition(
-        (position) => {
-          const convertedPosition: GeolocationPosition = {
-            coords: {
-              latitude: position.coords.latitude,
-              longitude: position.coords.longitude,
-              accuracy: position.coords.accuracy,
-              altitude: position.coords.altitude || undefined,
-              altitudeAccuracy: position.coords.altitudeAccuracy || undefined,
-              heading: position.coords.heading || undefined,
-              speed: position.coords.speed || undefined
-            },
-            timestamp: position.timestamp
-          }
-          
-          console.log('Web location update:', convertedPosition.coords.latitude, convertedPosition.coords.longitude)
-          if (this.onLocationUpdate) {
-            this.onLocationUpdate(convertedPosition)
-          }
-        },
-        (error) => {
-          console.error('Web geolocation error:', error)
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 30000,
-          maximumAge: 10000
-        }
-      )
-
-      this.watchId = watchId.toString()
-      console.log('Web geolocation watch started with ID:', this.watchId)
-      return this.watchId
+      // Web fallback - existing implementation
+      console.log('🌐 Starting web geolocation tracking...')
+      return this.startWebGeolocation(callback)
     }
   }
 
   async stopWatching() {
-    if (this.watchId) {
-      if (Capacitor.isNativePlatform()) {
-        try {
-          // Stop standard geolocation (Android service continues independently)
-          await Geolocation.clearWatch({ id: this.watchId })
-          console.log('✅ Web app location tracking stopped (Android service continues)')
-        } catch (error) {
-          console.error('❌ Error stopping location tracking:', error)
-        }
-      } else {
-        navigator.geolocation.clearWatch(parseInt(this.watchId))
-        console.log('Web geolocation watch stopped')
+    if (Capacitor.isNativePlatform()) {
+      console.log('🛑 Stopping background geolocation tracking...')
+      try {
+        await backgroundGeolocation.stopTracking()
+      } catch (error) {
+        console.error('❌ Failed to stop background tracking:', error)
       }
-      this.watchId = null
-      this.onLocationUpdate = null
+    } else {
+      // Web fallback
+      if (this.watchId) {
+        navigator.geolocation.clearWatch(Number(this.watchId))
+        this.watchId = null
+      }
     }
+    this.onLocationUpdate = null
   }
 
-  async getCurrentPosition(): Promise<GeolocationPosition | null> {
-    try {
-      if (Capacitor.isNativePlatform()) {
-        const position = await Geolocation.getCurrentPosition({
-          enableHighAccuracy: true,
-          timeout: 15000
-        })
-        
-        return {
-          coords: {
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude,
-            accuracy: position.coords.accuracy,
-            altitude: position.coords.altitude || undefined,
-            altitudeAccuracy: position.coords.altitudeAccuracy || undefined,
-            heading: position.coords.heading || undefined,
-            speed: position.coords.speed || undefined
-          },
-          timestamp: position.timestamp
-        }
-      } else {
-        return new Promise((resolve, reject) => {
-          navigator.geolocation.getCurrentPosition(
-            (position) => {
-              resolve({
-                coords: {
-                  latitude: position.coords.latitude,
-                  longitude: position.coords.longitude,
-                  accuracy: position.coords.accuracy,
-                  altitude: position.coords.altitude || undefined,
-                  altitudeAccuracy: position.coords.altitudeAccuracy || undefined,
-                  heading: position.coords.heading || undefined,
-                  speed: position.coords.speed || undefined
-                },
-                timestamp: position.timestamp
-              })
+  private watchId: number | null = null
+
+  private startWebGeolocation(callback: (position: GeolocationPosition) => void) {
+    if ('geolocation' in navigator) {
+      this.watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          const geoPosition: GeolocationPosition = {
+            coords: {
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              accuracy: position.coords.accuracy
             },
-            (error) => reject(error),
-            {
-              enableHighAccuracy: true,
-              timeout: 15000,
-              maximumAge: 3000
-            }
-          )
-        })
+            timestamp: Date.now()
+          }
+          callback(geoPosition)
+        },
+        (error) => console.error('❌ Web geolocation error:', error),
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 5000
+        }
+      )
+      return 'web-geolocation-active'
+    }
+    throw new Error('Geolocation not supported')
+  }
+
+  async getCurrentPosition(): Promise<GeolocationPosition> {
+    if (Capacitor.isNativePlatform()) {
+      // Use background geolocation for current position
+      try {
+        return await backgroundGeolocation.getCurrentPosition()
+      } catch (error) {
+        console.error('❌ Background geolocation getCurrentPosition failed:', error)
+        throw error
       }
-    } catch (error) {
-      console.error('Error getting current position:', error)
-      return null
+    } else {
+      // Web fallback
+      return new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          (position) => resolve({
+            coords: {
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              accuracy: position.coords.accuracy
+            },
+            timestamp: Date.now()
+          }),
+          reject,
+          { enableHighAccuracy: true, timeout: 10000 }
+        )
+      })
     }
   }
 
