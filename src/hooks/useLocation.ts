@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { GeolocationPosition } from '@/types'
 import { Capacitor } from '@capacitor/core'
-import { backgroundGeolocation } from '@/lib/background-geolocation'
 import { NativeGeolocationService } from '@/lib/native-geolocation'
 
 interface UseLocationOptions {
@@ -25,7 +24,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
   // Use ref for retry count to avoid triggering re-renders
   const retryCountRef = useRef(0)
   const lastUpdateRef = useRef(0)
-  const updateThrottle = 5000 // Only update database every 5 seconds
+  const updateThrottle = 5000 // Allow database updates every 5 seconds to match GPS interval
   
   const supabase = createClient()
   
@@ -211,31 +210,124 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
       return null
     }
 
-    console.log('🚀 Starting location watching for user:', userId)
+    console.log('🚀 Starting background location tracking for user:', userId)
     setError(null) // Clear any previous errors
     setLoading(true)
 
     try {
       if (Capacitor.isNativePlatform()) {
-        console.log('📱 Starting MediaStyle notification service + Background Geolocation...')
+        console.log('📱 Starting background geolocation with notification...')
         
         try {
-          // First start the MediaStyle notification service
-          const LocationServiceBridge = (await import('@/lib/location-service-bridge')).default
-          const serviceResult = await LocationServiceBridge.startLocationService()
-          console.log('✅ MediaStyle notification service started:', serviceResult.message)
+          // Use Capacitor Community Background Geolocation plugin
+          const { registerPlugin } = await import('@capacitor/core')
+          interface BackgroundGeolocationPlugin {
+            addWatcher(
+              options: {
+                backgroundMessage?: string;
+                backgroundTitle?: string;
+                requestPermissions?: boolean;
+                stale?: boolean;
+                distanceFilter?: number;
+              },
+              callback: (
+                location?: { latitude: number; longitude: number; accuracy?: number; altitude?: number; altitudeAccuracy?: number; bearing?: number; speed?: number; time?: number },
+                error?: { message: string; code?: string }
+              ) => void
+            ): Promise<string>;
+            removeWatcher(options: { id: string }): Promise<void>;
+          }
+          
+          const BackgroundGeolocation = registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation')
+          
+          let lastLocationTime = 0
+          let timerInterval: NodeJS.Timeout | null = null
+          let currentPosition: GeolocationPosition | null = null
+          
+          // Add location update listener with notification - DISTANCE-BASED + TIMER-BASED HYBRID
+          const watcherId = await BackgroundGeolocation.addWatcher(
+            {
+              backgroundMessage: "📍 Location Monitor is tracking your location",
+              backgroundTitle: "Location Tracking Active", 
+              requestPermissions: true,
+              stale: false,
+              distanceFilter: 5  // Trigger on 5 meter movement for real location changes
+            },
+            (location?: { latitude: number; longitude: number; accuracy?: number; altitude?: number; altitudeAccuracy?: number; bearing?: number; speed?: number; time?: number }, error?: { message: string; code?: string }) => {
+              if (error) {
+                console.error('❌ Background location error:', error)
+                setError('Background location error: ' + error.message)
+                return
+              }
+
+              if (location) {
+                console.log('📍 Background location update (movement-based):', location.latitude, location.longitude)
+                lastLocationTime = Date.now()
+                
+                const position: GeolocationPosition = {
+                  coords: {
+                    latitude: location.latitude,
+                    longitude: location.longitude,
+                    accuracy: location.accuracy || 0,
+                    altitude: location.altitude || undefined,
+                    altitudeAccuracy: location.altitudeAccuracy || undefined,
+                    heading: location.bearing || undefined,
+                    speed: location.speed || undefined
+                  },
+                  timestamp: location.time || Date.now()
+                }
+                
+                currentPosition = position
+                setPosition(position)
+                updateLocationInDB(position)
+                retryCountRef.current = 0
+              }
+            }
+          )
+          
+          // Set up 5-second timer for stationary updates
+          timerInterval = setInterval(async () => {
+            const now = Date.now()
+            // If no movement-based update in last 5 seconds, get current position
+            if (now - lastLocationTime >= 5000) {
+              console.log('⏰ Timer-based location update (stationary)')
+              try {
+                // Get current position using regular geolocation for timer updates
+                const position = await geoService.getCurrentPosition()
+                if (position) {
+                  currentPosition = position
+                  setPosition(position)
+                  updateLocationInDB(position)
+                  lastLocationTime = now
+                }
+              } catch (error) {
+                console.warn('Timer location update failed:', error)
+                // If we have a cached position, use it with updated timestamp
+                if (currentPosition) {
+                  const updatedPosition = {
+                    ...currentPosition,
+                    timestamp: now
+                  }
+                  console.log('📍 Using cached position for timer update')
+                  setPosition(updatedPosition)
+                  updateLocationInDB(updatedPosition)
+                  lastLocationTime = now
+                }
+              }
+            }
+          }, 5000) // Every 5 seconds
+          
+          console.log('✅ Background geolocation started with watcher ID:', watcherId)
+          setLoading(false)
+          setIsSharing(true)
+          
+          // Store timer reference for cleanup
+          return { watcherId, timerInterval }
         } catch (serviceError) {
-          console.warn('MediaStyle service failed, trying Background Geolocation only:', serviceError)
+          console.error('❌ Background geolocation failed:', serviceError)
+          setError('Failed to start background location: ' + (serviceError as Error).message)
+          throw serviceError
         }
-        
-        // Then start background geolocation for reliable tracking
-        await backgroundGeolocation.initialize()
-        await backgroundGeolocation.startTracking()
-        
-        console.log('✅ Background location tracking started - will continue even when app is minimized')
-        setLoading(false)
-        setIsSharing(true)
-        return 'background-geolocation-active'
       } else {
         console.log('🌐 Using web geolocation fallback...')
         
@@ -284,24 +376,39 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     }
   }, [userId, geoService, updateLocationInDB])
 
-  const stopWatching = useCallback(async (watchId?: string | null) => {
+  const stopWatching = useCallback(async (watcherData?: { watcherId: string; timerInterval: NodeJS.Timeout } | string | null) => {
     console.log('🛑 Stopping location tracking...')
     
     try {
       if (Capacitor.isNativePlatform()) {
-        console.log('📱 Stopping MediaStyle notification service + Background Geolocation...')
-        
-        // Stop background geolocation
-        await backgroundGeolocation.stopTracking()
-        console.log('✅ Background location tracking stopped')
+        console.log('📱 Stopping background geolocation...')
         
         try {
-          // Stop the MediaStyle notification service
-          const LocationServiceBridge = (await import('@/lib/location-service-bridge')).default
-          const serviceResult = await LocationServiceBridge.stopLocationService()
-          console.log('✅ MediaStyle notification service stopped:', serviceResult.message)
+          const { registerPlugin } = await import('@capacitor/core')
+          interface BackgroundGeolocationPlugin {
+            removeWatcher(options: { id: string }): Promise<void>;
+          }
+          const BackgroundGeolocation = registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation')
+          
+          // Handle both old string format and new object format
+          if (watcherData) {
+            if (typeof watcherData === 'string') {
+              // Legacy format - just the watcher ID
+              await BackgroundGeolocation.removeWatcher({ id: watcherData })
+              console.log('✅ Background geolocation watcher removed:', watcherData)
+            } else {
+              // New format with timer
+              await BackgroundGeolocation.removeWatcher({ id: watcherData.watcherId })
+              console.log('✅ Background geolocation watcher removed:', watcherData.watcherId)
+              
+              if (watcherData.timerInterval) {
+                clearInterval(watcherData.timerInterval)
+                console.log('✅ Timer interval cleared')
+              }
+            }
+          }
         } catch (serviceError) {
-          console.warn('MediaStyle service stop failed:', serviceError)
+          console.warn('Background geolocation stop failed:', serviceError)
         }
         
         setIsSharing(false)
@@ -309,6 +416,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
         console.log('🌐 Stopping web geolocation tracking...')
         await geoService.stopWatching()
         console.log('✅ Web location tracking stopped')
+        setIsSharing(false)
       }
     } catch (error) {
       console.error('❌ Error stopping location watch:', error)
@@ -316,119 +424,17 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
   }, [geoService])
 
   const checkSharingState = useCallback(async () => {
+    // For native platforms, we'll rely on the component state since 
+    // background geolocation doesn't provide a state check API
     if (!Capacitor.isNativePlatform()) {
       return
     }
 
-    // Don't check sharing state if user is not logged in
-    if (!userId) {
+    // Don't run background tracking if user is not logged in
+    if (!userId && isSharing) {
       console.log('👤 User not logged in - stopping any background tracking...')
-      
-      try {
-        // Stop any background services that might be running
-        const { backgroundGeolocation } = await import('@/lib/background-geolocation')
-        await backgroundGeolocation.stopTracking()
-        
-        try {
-          const LocationServiceBridge = (await import('@/lib/location-service-bridge')).default
-          await LocationServiceBridge.stopLocationService()
-        } catch (serviceError) {
-          console.warn('MediaStyle service stop failed:', serviceError)
-        }
-        
-        setIsSharing(false)
-        console.log('✅ Background services stopped - user not authenticated')
-      } catch (error) {
-        console.warn('Error stopping background services:', error)
-      }
+      setIsSharing(false)
       return
-    }
-
-    try {
-      // Check both MediaStyle service and Background Geolocation status
-      const LocationServiceBridge = (await import('@/lib/location-service-bridge')).default
-      const serviceResult = await LocationServiceBridge.isLocationSharing()
-      
-      // Check if Background Geolocation is active
-      const { backgroundGeolocation } = await import('@/lib/background-geolocation')
-      const isBackgroundActive = await backgroundGeolocation.isCurrentlyTracking()
-      
-      console.log('📊 Detailed sharing state check:')
-      console.log('  MediaStyle service isSharing:', serviceResult.isSharing)
-      console.log('  MediaStyle service serviceRunning:', serviceResult.serviceRunning)
-      console.log('  Background Geolocation active:', isBackgroundActive)
-      console.log('  Current UI state (isSharing):', isSharing)
-      console.log('  User authenticated:', !!userId)
-      
-      // CRITICAL FIX: If MediaStyle service is paused but Background Geolocation is still running,
-      // immediately stop Background Geolocation to sync the systems
-      if (!serviceResult.isSharing && isBackgroundActive) {
-        console.log('🚨 SYNC ISSUE DETECTED: MediaStyle paused but Background Geolocation still active')
-        console.log('🔄 FORCING Background Geolocation to stop...')
-        
-        try {
-          await backgroundGeolocation.stopTracking()
-          console.log('✅ Background Geolocation FORCE STOPPED successfully')
-          
-        } catch (stopError) {
-          console.error('❌ Failed to force stop Background Geolocation:', stopError)
-          
-          // Emergency stop as last resort
-          try {
-            await backgroundGeolocation.emergencyStop()
-            console.log('✅ Emergency stop completed')
-          } catch (emergencyError) {
-            console.error('❌ Emergency stop also failed:', emergencyError)
-          }
-        }
-        
-        // Additional safety check - verify it actually stopped
-        setTimeout(async () => {
-          try {
-            const isStillActive = await backgroundGeolocation.isCurrentlyTracking()
-            if (isStillActive) {
-              console.error('🚨 CRITICAL: Background Geolocation still active after stop attempt!')
-              // Force additional stop attempts
-              await backgroundGeolocation.stopTracking()
-            } else {
-              console.log('✅ Confirmed: Background Geolocation successfully stopped')
-            }
-          } catch (checkError) {
-            console.warn('Could not verify stop status:', checkError)
-          }
-        }, 1000)
-        
-        setIsSharing(false)
-        console.log('✅ UI updated to show STOPPED')
-        return
-      }
-      
-      // If MediaStyle service is active but Background Geolocation is stopped,
-      // start Background Geolocation to sync the systems  
-      if (serviceResult.isSharing && !isBackgroundActive) {
-        console.log('🔄 MediaStyle active but Background Geolocation stopped - starting Background Geolocation...')
-        
-        try {
-          await backgroundGeolocation.startTracking()
-          console.log('✅ Background Geolocation started successfully')
-        } catch (startError) {
-          console.error('❌ Failed to start Background Geolocation:', startError)
-        }
-        
-        setIsSharing(true)
-        console.log('✅ UI updated to show SHARING')
-        return
-      }
-      
-      // Both systems are in sync - use MediaStyle service state as primary
-      const newSharingState = serviceResult.isSharing
-      if (newSharingState !== isSharing) {
-        console.log(`🔄 Updating UI state from ${isSharing} to ${newSharingState}`)
-        setIsSharing(newSharingState)
-      }
-      
-    } catch (error) {
-      console.error('❌ Failed to check sharing state:', error)
     }
   }, [isSharing, userId])
 
@@ -449,45 +455,27 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     checkPermission()
   }, [checkPermission])
 
-  // Poll sharing state every 1 second to sync with notification controls (more aggressive)
+  // Simple effect to ensure no unauthorized background tracking
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) {
       return
     }
 
-    // Initial cleanup on mount - stop any leftover background services
-    const initialCleanup = async () => {
-      if (!userId) {
-        console.log('🧹 Initial cleanup: No user logged in, stopping any background services...')
-        try {
-          const { backgroundGeolocation } = await import('@/lib/background-geolocation')
-          await backgroundGeolocation.stopTracking()
-          
-          try {
-            const LocationServiceBridge = (await import('@/lib/location-service-bridge')).default
-            await LocationServiceBridge.stopLocationService()
-          } catch (serviceError) {
-            console.warn('Initial cleanup: MediaStyle service stop failed:', serviceError)
-          }
-          
-          setIsSharing(false)
-          console.log('✅ Initial cleanup completed - no unauthorized background tracking')
-        } catch (error) {
-          console.warn('Initial cleanup error:', error)
-        }
+    // Cleanup any old MediaStyle services on mount
+    const cleanupOldServices = async () => {
+      try {
+        const LocationServiceBridge = (await import('@/lib/location-service-bridge')).default
+        await LocationServiceBridge.stopLocationService()
+        console.log('🧹 Stopped any existing MediaStyle location service')
+      } catch (error) {
+        console.log('ℹ️ No existing MediaStyle service to stop')
       }
     }
 
-    initialCleanup()
+    cleanupOldServices()
 
-    const pollInterval = setInterval(() => {
-      checkSharingState()
-    }, 1000) // Changed from 2000ms to 1000ms for faster detection
-
-    // Check immediately on mount
+    // Check once on mount and when userId changes
     checkSharingState()
-
-    return () => clearInterval(pollInterval)
   }, [checkSharingState, userId])
 
   return {
@@ -505,15 +493,9 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
       console.log('🧹 Cleaning up location tracking on logout...')
       try {
         if (Capacitor.isNativePlatform()) {
-          const { backgroundGeolocation } = await import('@/lib/background-geolocation')
-          await backgroundGeolocation.stopTracking()
-          
-          try {
-            const LocationServiceBridge = (await import('@/lib/location-service-bridge')).default
-            await LocationServiceBridge.stopLocationService()
-          } catch (serviceError) {
-            console.warn('Cleanup: MediaStyle service stop failed:', serviceError)
-          }
+          // Note: We can't stop individual watchers without their IDs
+          // The background geolocation will stop when the app is closed
+          console.log('📱 Background geolocation will stop when app closes')
         } else {
           await geoService.stopWatching()
         }

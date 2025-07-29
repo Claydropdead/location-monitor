@@ -4,14 +4,13 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useLocation } from '@/hooks/useLocation'
 import { User } from '@/types'
-import { MapPin, Users, Clock, Signal, LogOut } from 'lucide-react'
+import { MapPin, Clock, Signal, LogOut } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 
 export default function UserDashboard() {
   const [user, setUser] = useState<User | null>(null)
-  const [watchId, setWatchId] = useState<string | null>(null)
+  const [watchId, setWatchId] = useState<{ watcherId: string; timerInterval: NodeJS.Timeout } | string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [onlineUsers, setOnlineUsers] = useState(0)
   const [lastLocationUpdate, setLastLocationUpdate] = useState<Date | null>(null)
   
   const supabase = createClient()
@@ -65,28 +64,39 @@ export default function UserDashboard() {
     loadUserProfile()
   }, [supabase, router])
 
-  // Count online users
+  // Auto-start location tracking when user logs in
   useEffect(() => {
-    const countOnlineUsers = async () => {
-      try {
-        const { count } = await supabase
-          .from('user_locations')
-          .select('*', { count: 'exact', head: true })
-          .not('latitude', 'is', null)
-          .not('longitude', 'is', null)
+    const autoStartLocationTracking = async () => {
+      if (!user || isSharing || watchId) {
+        // Don't start if no user, already sharing, or already have a watch ID
+        return
+      }
 
-        setOnlineUsers(count || 0)
+      console.log('🚀 Auto-starting location tracking for logged in user:', user.name)
+      
+      try {
+        // Request permission if needed
+        if (permission === 'denied' || permission === 'prompt') {
+          const granted = await requestPermission()
+          if (!granted) {
+            console.warn('⚠️ Location permission denied - cannot auto-start tracking')
+            return
+          }
+        }
+
+        // Start background location tracking
+        const id = await startWatching()
+        if (id) {
+          setWatchId(id)
+          console.log('✅ Auto-started location tracking with ID:', id)
+        }
       } catch (error) {
-        console.error('Error counting online users:', error)
+        console.error('❌ Failed to auto-start location tracking:', error)
       }
     }
 
-    if (user) {
-      countOnlineUsers()
-      const interval = setInterval(countOnlineUsers, 30000)
-      return () => clearInterval(interval)
-    }
-  }, [user, supabase])
+    autoStartLocationTracking()
+  }, [user, isSharing, watchId, permission, requestPermission, startWatching])
 
   const handleLocationToggle = async () => {
     if (!user?.id) return
@@ -214,27 +224,7 @@ export default function UserDashboard() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-white overflow-hidden shadow rounded-lg">
-            <div className="p-5">
-              <div className="flex items-center">
-                <div className="flex-shrink-0">
-                  <Users className="h-8 w-8 text-gray-400" />
-                </div>
-                <div className="ml-5 w-0 flex-1">
-                  <dl>
-                    <dt className="text-sm font-medium text-gray-500 truncate">
-                      Online Users
-                    </dt>
-                    <dd className="text-lg font-medium text-gray-900">
-                      {onlineUsers}
-                    </dd>
-                  </dl>
-                </div>
-              </div>
-            </div>
-          </div>
-
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
           <div className="bg-white overflow-hidden shadow rounded-lg">
             <div className="p-5">
               <div className="flex items-center">
@@ -281,11 +271,39 @@ export default function UserDashboard() {
         <div className="bg-white shadow rounded-lg">
           <div className="px-4 py-5 sm:p-6">
             <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">
-              Location Sharing
+              Location Sharing Control
             </h3>
             <p className="text-sm text-gray-600 mb-6">
-              Start sharing your location to be visible on the admin map.
+              You have full control over your location sharing. You can start or stop sharing at any time, 
+              even when the app is running in the background. Use the button below or the notification controls.
             </p>
+            
+            {/* Enhanced Status Display */}
+            <div className="mb-6 p-4 rounded-lg border-2 border-dashed border-gray-200">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <div className={`w-3 h-3 rounded-full mr-3 ${
+                    isSharing ? 'bg-green-500 animate-pulse' : 'bg-red-500'
+                  }`}></div>
+                  <span className={`text-lg font-semibold ${
+                    isSharing ? 'text-green-600' : 'text-red-600'
+                  }`}>
+                    {isSharing ? '🟢 ACTIVELY SHARING' : '🔴 NOT SHARING'}
+                  </span>
+                </div>
+                {isSharing && (
+                  <span className="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                    Tracking in background
+                  </span>
+                )}
+              </div>
+              {isSharing && (
+                <p className="text-sm text-gray-600 mt-2">
+                  Your location is being shared and will continue even when you minimize the app. 
+                  You can stop this anytime using the button below or notification controls.
+                </p>
+              )}
+            </div>
             
             {position && (
               <div className="mb-4 p-3 bg-gray-50 rounded-md">
@@ -302,14 +320,14 @@ export default function UserDashboard() {
               <button
                 onClick={handleLocationToggle}
                 disabled={loading || permission === 'denied'}
-                className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md ${
+                className={`inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm ${
                   isSharing
-                    ? 'text-white bg-red-600 hover:bg-red-700'
-                    : 'text-white bg-green-600 hover:bg-green-700'
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
+                    ? 'text-white bg-red-600 hover:bg-red-700 focus:ring-red-500'
+                    : 'text-white bg-green-600 hover:bg-green-700 focus:ring-green-500'
+                } disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors duration-200`}
               >
-                <MapPin className="h-4 w-4 mr-2" />
-                {isSharing ? 'Stop Sharing' : 'Share Location'}
+                <MapPin className="h-5 w-5 mr-2" />
+                {isSharing ? '🛑 Stop Sharing Now' : '📍 Start Sharing Location'}
               </button>
 
               {permission === 'denied' && (
@@ -320,6 +338,29 @@ export default function UserDashboard() {
                   Request Permission
                 </button>
               )}
+            </div>
+
+            {/* Background Control Notice */}
+            <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-blue-800">
+                    Background Control Available
+                  </h3>
+                  <div className="mt-2 text-sm text-blue-700">
+                    <p>
+                      • Control location sharing from notification panel (play/pause buttons)<br/>
+                      • Stop sharing anytime from this dashboard<br/>
+                      • Location continues when app is minimized (until you stop it)
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
 
             {permission === 'denied' && (

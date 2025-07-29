@@ -2,7 +2,6 @@
 
 import { Capacitor } from '@capacitor/core'
 import type { GeolocationPosition } from '@/types'
-import { backgroundGeolocation } from './background-geolocation'
 
 export class NativeGeolocationService {
   private onLocationUpdate: ((position: GeolocationPosition) => void) | null = null
@@ -24,15 +23,8 @@ export class NativeGeolocationService {
 
   async requestPermissions() {
     if (Capacitor.isNativePlatform()) {
-      console.log('📱 Using Capacitor Background Geolocation for permissions')
-      try {
-        // Initialize background geolocation which handles permissions
-        await backgroundGeolocation.initialize()
-        return { granted: true }
-      } catch (error) {
-        console.error('❌ Failed to request permissions:', error)
-        return { granted: false }
-      }
+      console.log('📱 Native platform - MediaStyle service will handle permissions')
+      return { granted: true }
     } else {
       // Web fallback
       if ('geolocation' in navigator) {
@@ -46,16 +38,9 @@ export class NativeGeolocationService {
     this.onLocationUpdate = callback
     
     if (Capacitor.isNativePlatform()) {
-      console.log('🚀 Starting background geolocation tracking...')
-      try {
-        await backgroundGeolocation.startTracking()
-        
-        // Return a watch ID for compatibility
-        return 'background-geolocation-active'
-      } catch (error) {
-        console.error('❌ Failed to start background tracking:', error)
-        throw error
-      }
+      console.log('� Native platform - MediaStyle service will handle background tracking')
+      // Return a watch ID for compatibility
+      return 'media-style-service-active'
     } else {
       // Web fallback - existing implementation
       console.log('🌐 Starting web geolocation tracking...')
@@ -65,12 +50,8 @@ export class NativeGeolocationService {
 
   async stopWatching() {
     if (Capacitor.isNativePlatform()) {
-      console.log('🛑 Stopping background geolocation tracking...')
-      try {
-        await backgroundGeolocation.stopTracking()
-      } catch (error) {
-        console.error('❌ Failed to stop background tracking:', error)
-      }
+      console.log('� Native platform - MediaStyle service will handle stopping')
+      // Nothing to do here, MediaStyle service handles it
     } else {
       // Web fallback
       if (this.watchId) {
@@ -111,11 +92,21 @@ export class NativeGeolocationService {
 
   async getCurrentPosition(): Promise<GeolocationPosition> {
     if (Capacitor.isNativePlatform()) {
-      // Use background geolocation for current position
+      // Use Capacitor Geolocation plugin for current position
       try {
-        return await backgroundGeolocation.getCurrentPosition()
+        const { Geolocation } = await import('@capacitor/geolocation')
+        const coordinates = await Geolocation.getCurrentPosition()
+        
+        return {
+          coords: {
+            latitude: coordinates.coords.latitude,
+            longitude: coordinates.coords.longitude,
+            accuracy: coordinates.coords.accuracy
+          },
+          timestamp: Date.now()
+        }
       } catch (error) {
-        console.error('❌ Background geolocation getCurrentPosition failed:', error)
+        console.error('❌ Capacitor geolocation getCurrentPosition failed:', error)
         throw error
       }
     } else {

@@ -19,28 +19,21 @@ public class MainActivity extends BridgeActivity {
         
         android.util.Log.d("MainActivity", "📱 App started successfully");
         
+        // Stop any existing MediaStyle location service from previous sessions
+        try {
+            Intent locationService = new Intent(this, LocationTrackingService.class);
+            stopService(locationService);
+            android.util.Log.d("MainActivity", "🛑 Stopped any existing MediaStyle location service");
+        } catch (Exception e) {
+            android.util.Log.d("MainActivity", "ℹ️ No existing MediaStyle service to stop");
+        }
+        
         // Check and request battery optimization exemption
         checkBatteryOptimization();
         
-        // AUTO-START the LocationTrackingService when app opens (like it was working before)
-        android.util.Log.d("MainActivity", "🚀 Auto-starting LocationTrackingService with MediaStyle notification...");
-        
-        try {
-            Intent locationService = new Intent(this, LocationTrackingService.class);
-            
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                android.util.Log.d("MainActivity", "📱 Starting FOREGROUND service (Android 8+)");
-                startForegroundService(locationService);
-            } else {
-                android.util.Log.d("MainActivity", "📱 Starting regular service (Android 7-)");
-                startService(locationService);
-            }
-            
-            android.util.Log.d("MainActivity", "✅ LocationTrackingService auto-started! Notification should appear now!");
-        } catch (Exception e) {
-            android.util.Log.e("MainActivity", "❌ Failed to auto-start LocationTrackingService: " + e.getMessage());
-            e.printStackTrace();
-        }
+        // Note: Location tracking is now handled by the background geolocation plugin
+        // No auto-starting of MediaStyle service needed
+        android.util.Log.d("MainActivity", "📱 App ready - location tracking will be handled by background geolocation plugin");
     }
     
     private void checkBatteryOptimization() {
