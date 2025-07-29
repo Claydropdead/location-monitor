@@ -12,6 +12,7 @@ export default function UserDashboard() {
   const [watchId, setWatchId] = useState<{ watcherId: string; timerInterval: NodeJS.Timeout } | string | null>(null)
   const [loading, setLoading] = useState(true)
   const [lastLocationUpdate, setLastLocationUpdate] = useState<Date | null>(null)
+  const [userWentOfflineManually, setUserWentOfflineManually] = useState(false) // Track manual offline
   
   const supabase = createClient()
   const router = useRouter()
@@ -67,8 +68,8 @@ export default function UserDashboard() {
   // Auto-start location tracking when user logs in
   useEffect(() => {
     const autoStartLocationTracking = async () => {
-      if (!user || isSharing || watchId) {
-        // Don't start if no user, already sharing, or already have a watch ID
+      if (!user || isSharing || watchId || userWentOfflineManually) {
+        // Don't start if no user, already sharing, already have a watch ID, or user manually went offline
         return
       }
 
@@ -96,7 +97,7 @@ export default function UserDashboard() {
     }
 
     autoStartLocationTracking()
-  }, [user, isSharing, watchId, permission, requestPermission, startWatching])
+  }, [user, isSharing, watchId, userWentOfflineManually, permission, requestPermission, startWatching])
 
   const handleLocationToggle = async () => {
     if (!user?.id) return
@@ -105,26 +106,23 @@ export default function UserDashboard() {
       setLoading(true)
 
       if (isSharing) {
-        // Stop sharing
-        console.log('🛑 Stopping location sharing...')
+        // Stop sharing - Use the hook's stopWatching with offline flag
+        console.log('🛑 Stopping location sharing - going offline...')
         if (watchId) {
-          await stopWatching(watchId)
+          await stopWatching(watchId, true) // true = go offline
           setWatchId(null)
         }
+        
+        // Mark that user manually went offline
+        setUserWentOfflineManually(true)
         
         // Force immediate state sync check after button press
         setTimeout(() => {
           console.log('🔄 Force checking location sharing state after stop button...')
           // The useLocation hook should automatically detect the change
         }, 500)
-        
-        // Clear from database
-        await supabase
-          .from('user_locations')
-          .delete()
-          .eq('user_id', user.id)
 
-        console.log('✅ Location sharing stopped')
+        console.log('✅ Location sharing stopped - user marked offline')
       } else {
         // Start sharing
         console.log('🚀 Starting location sharing...')
@@ -140,6 +138,8 @@ export default function UserDashboard() {
         const id = await startWatching()
         if (id) {
           setWatchId(id)
+          // Clear manual offline flag when user manually starts sharing
+          setUserWentOfflineManually(false)
           console.log('✅ Location sharing started')
         }
       }
@@ -155,6 +155,9 @@ export default function UserDashboard() {
     try {
       console.log('🚪 User signing out - cleaning up location tracking...')
       
+      // Clear manual offline state
+      setUserWentOfflineManually(false)
+      
       // Use the comprehensive cleanup method
       if (cleanup) {
         await cleanup()
@@ -165,11 +168,13 @@ export default function UserDashboard() {
         await stopWatching(watchId)
       }
       
+      // Sign out: DELETE user location record completely
       if (user?.id) {
         await supabase
           .from('user_locations')
           .delete()
           .eq('user_id', user.id)
+        console.log('🗑️ User location record DELETED on sign out')
       }
 
       await supabase.auth.signOut()
@@ -288,7 +293,7 @@ export default function UserDashboard() {
                   <span className={`text-lg font-semibold ${
                     isSharing ? 'text-green-600' : 'text-red-600'
                   }`}>
-                    {isSharing ? '🟢 ACTIVELY SHARING' : '🔴 NOT SHARING'}
+                    {isSharing ? '🟢 ONLINE - ACTIVELY SHARING' : '🔴 OFFLINE - NOT SHARING'}
                   </span>
                 </div>
                 {isSharing && (
@@ -297,10 +302,15 @@ export default function UserDashboard() {
                   </span>
                 )}
               </div>
-              {isSharing && (
+              {isSharing ? (
                 <p className="text-sm text-gray-600 mt-2">
                   Your location is being shared and will continue even when you minimize the app. 
-                  You can stop this anytime using the button below or notification controls.
+                  You can go offline anytime using the button below.
+                </p>
+              ) : (
+                <p className="text-sm text-gray-600 mt-2">
+                  You are currently offline. Other users cannot see your location on the map.
+                  Click the button below to come online and start sharing.
                 </p>
               )}
             </div>
@@ -327,7 +337,7 @@ export default function UserDashboard() {
                 } disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors duration-200`}
               >
                 <MapPin className="h-5 w-5 mr-2" />
-                {isSharing ? '🛑 Stop Sharing Now' : '📍 Start Sharing Location'}
+                {isSharing ? '� Go Offline' : '📍 Start Sharing Location'}
               </button>
 
               {permission === 'denied' && (
@@ -354,9 +364,9 @@ export default function UserDashboard() {
                   </h3>
                   <div className="mt-2 text-sm text-blue-700">
                     <p>
-                      • Control location sharing from notification panel (play/pause buttons)<br/>
-                      • Stop sharing anytime from this dashboard<br/>
-                      • Location continues when app is minimized (until you stop it)
+                      • Go offline/online instantly with the button above<br/>
+                      • Going offline keeps your location private from others<br/>
+                      • Sign out completely removes you from the system
                     </p>
                   </div>
                 </div>

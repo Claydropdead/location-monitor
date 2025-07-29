@@ -398,7 +398,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     }
   }, [userId, geoService, updateLocationInDB])
 
-  const stopWatching = useCallback(async (watcherData?: { watcherId: string; timerInterval: NodeJS.Timeout } | string | null) => {
+  const stopWatching = useCallback(async (watcherData?: { watcherId: string; timerInterval: NodeJS.Timeout } | string | null, shouldGoOffline = false) => {
     console.log('🛑 Stopping location tracking...')
     
     try {
@@ -440,10 +440,16 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
         console.log('✅ Web location tracking stopped')
         setIsSharing(false)
       }
+
+      // Mark user as offline if requested (for stop button vs sign out)
+      if (shouldGoOffline) {
+        await markUserOffline()
+        console.log('🔴 User marked offline in database')
+      }
     } catch (error) {
       console.error('❌ Error stopping location watch:', error)
     }
-  }, [geoService])
+  }, [geoService, markUserOffline])
 
   const checkSharingState = useCallback(async () => {
     // For native platforms, we'll rely on the component state since 
@@ -510,6 +516,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     startWatching,
     stopWatching,
     requestPermission,
+    markUserOffline,
     // Add cleanup method for logout
     cleanup: useCallback(async () => {
       console.log('🧹 Cleaning up location tracking on logout...')

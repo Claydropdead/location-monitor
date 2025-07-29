@@ -1,0 +1,17 @@
+{
+	"appId": "com.locationmonitor.app",
+	"appName": "Location Monitor",
+	"webDir": "out",
+	"server": {
+		"androidScheme": "https"
+	},
+	"plugins": {
+		"Geolocation": {
+			"enableBackgroundLocationUpdates": true
+		}
+	},
+	"packageClassList": [
+		"BackgroundGeolocation",
+		"GeolocationPlugin"
+	]
+}
