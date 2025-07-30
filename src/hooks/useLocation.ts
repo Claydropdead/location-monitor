@@ -21,10 +21,13 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
   const [loading, setLoading] = useState(false)
   const [permission, setPermission] = useState<PermissionState>('prompt')
   const [isSharing, setIsSharing] = useState(false)
+  const [isOnline, setIsOnline] = useState(navigator.onLine)
   
   // Use ref for retry count to avoid triggering re-renders
   const retryCountRef = useRef(0)
   const lastUpdateRef = useRef(0)
+  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const currentLocationRef = useRef<GeolocationPosition | null>(null)
   const updateThrottle = 5000
   
   const supabase = createClient()
@@ -52,6 +55,12 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
       return
     }
 
+    // Check if we're online before attempting database update
+    if (!navigator.onLine && !force) {
+      console.log('📡 Offline - queueing location update for when connection returns')
+      return
+    }
+
     const now = Date.now()
     if (!force && now - lastUpdateRef.current < updateThrottle) {
       console.log('⏱️ Location update throttled, skipping database write')
@@ -62,6 +71,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     console.log('🌍 Updating location in DB for user:', userId)
     console.log('📍 Position:', pos.coords.latitude, pos.coords.longitude)
     console.log('🎯 Accuracy:', pos.coords.accuracy ? `±${Math.round(pos.coords.accuracy)}m` : 'Unknown')
+    console.log('🌐 Network status:', navigator.onLine ? 'Online' : 'Offline')
 
     try {
       console.log('🔄 Upserting location record (single record per user)...')
@@ -133,6 +143,41 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
       })
     }
   }, [userId, supabase, onLocationUpdate])
+
+  // Heartbeat function to keep stationary users marked as online
+  const sendHeartbeat = useCallback(async () => {
+    if (!userId || !isSharing) {
+      console.log('💓 Heartbeat skipped - not sharing or no userId')
+      return
+    }
+
+    // Check if we're online before attempting heartbeat
+    if (!navigator.onLine) {
+      console.log('💓 Heartbeat skipped - offline')
+      return
+    }
+
+    console.log('💓 Sending heartbeat to keep stationary user online (user:', userId, ')')
+    
+    try {
+      const { error } = await supabase
+        .from('user_locations')
+        .update({
+          timestamp: new Date().toISOString(),
+          is_active: true
+          // Don't update lat/lng - this is just a "I'm still here" signal
+        })
+        .eq('user_id', userId)
+
+      if (error) {
+        console.error('❌ Heartbeat error:', error)
+      } else {
+        console.log('✅ Heartbeat sent successfully - user stays online while stationary')
+      }
+    } catch (error) {
+      console.error('❌ Heartbeat failed:', error)
+    }
+  }, [userId, isSharing, supabase])
 
   // Simple mark user as offline when they close the app
   const markUserOffline = useCallback(async () => {
@@ -291,6 +336,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
                 }
                 
                 currentPosition = position
+                currentLocationRef.current = position
                 setPosition(position)
                 updateLocationInDB(position)
                 retryCountRef.current = 0
@@ -344,6 +390,12 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
           setLoading(false)
           setIsSharing(true)
           
+          // Start heartbeat for stationary users (every 3 minutes)
+          console.log('💓 Starting heartbeat timer for stationary user detection')
+          heartbeatIntervalRef.current = setInterval(() => {
+            sendHeartbeat()
+          }, 3 * 60 * 1000) // Every 3 minutes
+          
           return {
             watcherId,
             timerInterval
@@ -361,11 +413,19 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
           retryCountRef.current = 0
           setLoading(false)
           setPosition(position)
+          currentLocationRef.current = position
           updateLocationInDB(position)
         })
         
         console.log('Web watch started with ID:', watchId)
         setIsSharing(true)
+        
+        // Start heartbeat for stationary users (every 3 minutes)
+        console.log('💓 Starting heartbeat timer for stationary user detection')
+        heartbeatIntervalRef.current = setInterval(() => {
+          sendHeartbeat()
+        }, 3 * 60 * 1000) // Every 3 minutes
+        
         return watchId
       }
     } catch (error) {
@@ -438,6 +498,13 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
         setIsSharing(false)
       }
 
+      // Clear heartbeat interval
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current)
+        heartbeatIntervalRef.current = null
+        console.log('✅ Heartbeat interval cleared')
+      }
+
       if (markOffline) {
         await markUserOffline()
         console.log('🔴 User marked offline in database')
@@ -472,6 +539,38 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     checkPermission()
   }, [checkPermission])
 
+  // Network connection monitoring
+  useEffect(() => {
+    const handleOnline = () => {
+      console.log('🌐 Network connection restored')
+      setIsOnline(true)
+      // Resume location sharing if user was sharing before going offline
+      if (isSharing && userId) {
+        console.log('📡 Resuming location sharing after connection restored')
+        // The existing location watching will automatically resume database updates
+      }
+    }
+
+    const handleOffline = () => {
+      console.log('📡 Network connection lost - location updates will be queued')
+      setIsOnline(false)
+      // Don't mark user as offline in database yet - just stop updates
+      // GPS continues running in background, we'll resume updates when online
+    }
+
+    // Set initial state
+    setIsOnline(navigator.onLine)
+
+    // Listen for network changes
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [isSharing, userId])
+
   // Handle user logout cleanup
   useEffect(() => {
     if (Capacitor.isNativePlatform()) {
@@ -485,6 +584,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     loading,
     permission,
     isSharing,
+    isOnline,
     getCurrentPosition,
     startWatching,
     stopWatching,
@@ -497,6 +597,13 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
           console.log('📱 Background geolocation will stop when app closes')
         } else {
           await geoService.stopWatching()
+        }
+        
+        // Clear heartbeat interval
+        if (heartbeatIntervalRef.current) {
+          clearInterval(heartbeatIntervalRef.current)
+          heartbeatIntervalRef.current = null
+          console.log('✅ Heartbeat interval cleared during cleanup')
         }
         
         // Mark user offline when cleaning up

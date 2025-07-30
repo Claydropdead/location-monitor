@@ -379,11 +379,24 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
       </LayersControl>
       
       {markers.map((marker) => {
-        console.log('🎯 Rendering marker:', marker.id, 'at position:', marker.position, 'is_active:', marker.location.is_active)
+        console.log('🎯 Rendering marker:', marker.id, 'at position:', marker.position, 'is_active:', marker.location.is_active, 'timestamp:', marker.location.timestamp)
         
-        // Only check database is_active status (no time-based timeout)
-        const isActiveInDB = marker.location.is_active // Check database is_active status
-        const isOnline = isActiveInDB // User is online if is_active is true in database
+        // Time-based online detection: 5 minutes timeout
+        const fiveMinutesAgo = Date.now() - (5 * 60 * 1000)
+        const lastUpdateTime = new Date(marker.location.timestamp).getTime()
+        const isRecentlyActive = lastUpdateTime > fiveMinutesAgo
+        
+        // User is online if: actively sharing AND has updated within 5 minutes
+        const isActiveInDB = marker.location.is_active
+        const isOnline = isActiveInDB && isRecentlyActive
+        
+        // Calculate how long ago the last update was
+        const minutesAgo = Math.floor((Date.now() - lastUpdateTime) / (1000 * 60))
+        const timeStatus = minutesAgo === 0 ? 'Just now' : 
+                          minutesAgo === 1 ? '1 min ago' : 
+                          minutesAgo < 60 ? `${minutesAgo} mins ago` : 
+                          Math.floor(minutesAgo / 60) === 1 ? '1 hour ago' : 
+                          `${Math.floor(minutesAgo / 60)} hours ago`
         
         return (
           <Marker
@@ -396,8 +409,11 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
               <div className="text-center">
                 <div className="font-semibold">{marker.user.name}</div>
                 <div className="text-xs">
-                  {isOnline ? '🟢 Online' : '⚪ Offline'}
+                  {isOnline ? '🟢 Online' : 
+                   isActiveInDB ? '🟡 Sharing (inactive 5+ min)' : 
+                   '⚪ Offline'}
                 </div>
+                <div className="text-xs text-gray-500">{timeStatus}</div>
               </div>
             </Tooltip>
             
@@ -439,16 +455,35 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
                   <p className="text-xs text-gray-500">
                     {formatTimestamp(marker.location.timestamp)}
                   </p>
+                  <p className="text-xs text-gray-400">
+                    ({timeStatus})
+                  </p>
+                </div>
+                
+                <div className="mb-2">
+                  <p className="text-sm font-medium text-gray-700">Status:</p>
+                  <p className="text-xs text-gray-500">
+                    {isActiveInDB ? 'Location sharing enabled' : 'Location sharing disabled'}
+                  </p>
+                  <p className="text-xs text-gray-400">
+                    {isRecentlyActive ? 'Recently active' : 'Inactive for 5+ minutes'}
+                  </p>
                 </div>
                 
                 <div className="mt-3 pt-2 border-t">
                   <div className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                    isOnline ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                    isOnline ? 'bg-green-100 text-green-800' : 
+                    isActiveInDB ? 'bg-yellow-100 text-yellow-800' : 
+                    'bg-gray-100 text-gray-800'
                   }`}>
                     <div className={`w-2 h-2 rounded-full mr-1 ${
-                      isOnline ? 'bg-green-400' : 'bg-gray-400'
+                      isOnline ? 'bg-green-400' : 
+                      isActiveInDB ? 'bg-yellow-400' : 
+                      'bg-gray-400'
                     }`}></div>
-                    {isOnline ? 'Online' : 'Offline'}
+                    {isOnline ? 'Online' : 
+                     isActiveInDB ? 'Sharing (Inactive)' : 
+                     'Offline'}
                   </div>
                 </div>
               </div>

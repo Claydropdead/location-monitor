@@ -115,8 +115,8 @@ export default function RealtimeMap() {
         console.log('User table test successful:', { testUsers })
       }
 
-      // Get all recent locations (both active and inactive for last 10 minutes)
-      console.log('Fetching recent locations with user data...')
+      // Get all locations (we'll filter by time on the client side to show recent vs old)
+      console.log('Fetching all user locations with user data...')
       const { data: locationsData, error: locationsError } = await supabase
         .from('user_locations')
         .select(`
@@ -129,7 +129,7 @@ export default function RealtimeMap() {
           is_active,
           users!inner(id, name, email, phone, role)
         `)
-        // Show ALL users forever - no time filtering
+        // Show ALL users forever - no time filtering here, we'll handle it in the marker logic
         .order('timestamp', { ascending: false })
         .returns<LocationWithUser[]>()
 

@@ -132,17 +132,20 @@ export default function AdminDashboard() {
         .select('id', { count: 'exact' })
         .neq('role', 'admin')
 
-      // Online users (based on is_active status only, no time limit)
+      // Online users (users who have updated their location in the last 5 minutes)
+      // This represents users who are currently connected and recently active
+      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
       const { count: onlineUsers } = await supabase
         .from('user_locations')
         .select('user_id', { count: 'exact' })
-        .eq('is_active', true)
+        .gte('timestamp', fiveMinutesAgo)
 
-      // Active users (have location data)
+      // Active users (actively sharing location AND recently updated)
       const { count: activeUsers } = await supabase
         .from('user_locations')
         .select('user_id', { count: 'exact' })
         .eq('is_active', true)
+        .gte('timestamp', fiveMinutesAgo)
 
       const newStats = {
         totalUsers: totalUsers || 0,
@@ -316,11 +319,11 @@ export default function AdminDashboard() {
                   <div className="flex items-center space-x-4 text-sm text-gray-500">
                     <div className="flex items-center">
                       <div className="w-3 h-3 bg-green-400 rounded-full mr-2"></div>
-                      Online (last 5 min)
+                      Online (active within 5 min)
                     </div>
                     <div className="flex items-center">
                       <div className="w-3 h-3 bg-gray-400 rounded-full mr-2"></div>
-                      Offline
+                      Offline (inactive 5+ min)
                     </div>
                   </div>
                 </div>
@@ -335,8 +338,14 @@ export default function AdminDashboard() {
                 <p>
                   <strong>Map Features:</strong> 
                   • Hover over markers for user details • Zoom in/out with mouse wheel • 
-                  Drag to pan around Mindoro • Green markers = recent activity (last 5 min) • 
-                  Click markers for detailed popup with contact info
+                  Drag to pan around Mindoro • Green markers = active within 5 minutes • 
+                  Gray markers = inactive for 5+ minutes • Click markers for detailed popup with contact info
+                </p>
+                <p className="mt-2">
+                  <strong>Heartbeat System:</strong> 
+                  • Stationary users send heartbeat every 3 minutes to stay online • 
+                  • Movement updates location immediately • 
+                  • Users marked offline after 5 minutes of no activity/heartbeat
                 </p>
               </div>
             </div>
