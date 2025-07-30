@@ -46,7 +46,22 @@ const config: CapacitorConfig = {
       
       // Notification settings
       notificationIconLarge: "@mipmap/ic_launcher",
-      notificationIconSmall: "@mipmap/ic_launcher"
+      notificationIconSmall: "@mipmap/ic_launcher",
+      
+      // Enhanced reliability settings for Android
+      priority: "PRIORITY_HIGH_ACCURACY",
+      maxWaitTime: 60000,
+      deferTime: 0,
+      autoSync: true,
+      batchSync: false,
+      
+      // Prevent aggressive battery optimization
+      disableElasticity: true,
+      elasticityMultiplier: 1,
+      
+      // Android Doze mode resistance
+      disableStopDetection: true,
+      isDebugging: false
     },
     CapacitorHttp: {
       enabled: true  // Use native HTTP for better background reliability

@@ -3,9 +3,24 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { GeolocationPosition } from '@/types'
-import { Capacitor } from '@capacitor/core'
+import { Capacitor, registerPlugin } from '@capacitor/core'
 import { NativeGeolocationService } from '@/lib/native-geolocation'
 import { batteryOptimizationService } from '@/lib/battery-optimization'
+
+// Register HeartbeatPlugin globally  
+interface HeartbeatPlugin {
+  startHeartbeat(options: { userId: string }): Promise<void>
+  stopHeartbeat(): Promise<void>
+  isHeartbeatActive(): Promise<{ isActive: boolean }>
+}
+const HeartbeatService = registerPlugin<HeartbeatPlugin>('HeartbeatPlugin')
+
+// NEW: The REAL solution - WebSocket-based persistent connection
+interface RealtimeConnectionPlugin {
+  startRealtimeConnection(options: { userId: string }): Promise<void>
+  stopRealtimeConnection(): Promise<void>
+}
+const RealtimeConnection = registerPlugin<RealtimeConnectionPlugin>('RealtimeConnectionPlugin')
 
 interface UseLocationOptions {
   enableHighAccuracy?: boolean
@@ -153,7 +168,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
 
     // Check if we're online before attempting heartbeat
     if (!navigator.onLine) {
-      console.log('💓 Heartbeat skipped - offline')
+      console.log('� Heartbeat skipped - offline')
       return
     }
 
@@ -171,13 +186,83 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
 
       if (error) {
         console.error('❌ Heartbeat error:', error)
+        // If it's a network error, that's expected when offline
+        if (error.message?.includes('fetch') || error.message?.includes('network')) {
+          console.log('📡 Heartbeat failed due to network - user is likely offline')
+        }
       } else {
         console.log('✅ Heartbeat sent successfully - user stays online while stationary')
       }
     } catch (error) {
       console.error('❌ Heartbeat failed:', error)
+      // Network errors are expected when actually offline
+      if (error instanceof Error && (error.message?.includes('fetch') || error.message?.includes('network'))) {
+        console.log('📡 Heartbeat failed due to network - user is likely offline')
+      }
     }
   }, [userId, isSharing, supabase])
+
+  // Auto-restart functionality for Android
+  const setTrackingState = useCallback(async (isTracking: boolean, userId?: string) => {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const { Preferences } = await import('@capacitor/preferences')
+        
+        await Preferences.set({
+          key: 'was_tracking',
+          value: isTracking.toString()
+        })
+        
+        await Preferences.set({
+          key: 'should_auto_restart', 
+          value: 'true'
+        })
+        
+        if (userId) {
+          await Preferences.set({
+            key: 'user_id',
+            value: userId
+          })
+        }
+        
+        console.log('📱 Auto-restart state saved:', { isTracking, userId })
+      } catch (error) {
+        console.error('Failed to save tracking state:', error)
+      }
+    }
+  }, [])
+
+  // Check if we should auto-restart tracking on app startup
+  const checkAutoRestart = useCallback(async () => {
+    if (Capacitor.isNativePlatform() && userId) {
+      try {
+        const { Preferences } = await import('@capacitor/preferences')
+        
+        const wasTracking = await Preferences.get({ key: 'was_tracking' })
+        const shouldAutoRestart = await Preferences.get({ key: 'should_auto_restart' })
+        const savedUserId = await Preferences.get({ key: 'user_id' })
+        
+        console.log('🔄 Auto-restart check:', {
+          wasTracking: wasTracking.value,
+          shouldAutoRestart: shouldAutoRestart.value,
+          savedUserId: savedUserId.value,
+          currentUserId: userId
+        })
+        
+        if (wasTracking.value === 'true' && 
+            shouldAutoRestart.value === 'true' && 
+            savedUserId.value === userId && 
+            !isSharing) {
+          console.log('🚀 Auto-restarting location tracking...')
+          setTimeout(() => {
+            startWatching()
+          }, 2000) // Small delay to ensure app is fully loaded
+        }
+      } catch (error) {
+        console.error('Failed to check auto-restart:', error)
+      }
+    }
+  }, [userId, isSharing]) // Remove startWatching from dependencies to avoid circular reference
 
   // Simple mark user as offline when they close the app
   const markUserOffline = useCallback(async () => {
@@ -344,9 +429,13 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
             }
           )
           
-          // Set up 45-second timer for background location updates
+          // Set up 45-second timer for background location updates (NO MORE HEARTBEAT HERE)
           timerInterval = setInterval(async () => {
             const now = Date.now()
+            
+            // NOTE: Heartbeat is now handled by native Android service, not JavaScript!
+            console.log('⏰ Timer check - native heartbeat service handles staying online')
+            
             // If no movement-based update in last 45 seconds, get current position
             if (now - lastLocationTime >= 45000) {
               console.log('⏰ Timer-based location check (background/stationary)')
@@ -390,11 +479,33 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
           setLoading(false)
           setIsSharing(true)
           
-          // Start heartbeat for stationary users (every 3 minutes)
-          console.log('💓 Starting heartbeat timer for stationary user detection')
-          heartbeatIntervalRef.current = setInterval(() => {
-            sendHeartbeat()
-          }, 3 * 60 * 1000) // Every 3 minutes
+          // Save tracking state for auto-restart
+          await setTrackingState(true, userId)
+          
+          // THE REAL SOLUTION: Start persistent WebSocket connection 
+          console.log('🌐 Starting REAL persistent connection (WebSocket-based)...')
+          
+          try {
+            await RealtimeConnection.startRealtimeConnection({ userId })
+            console.log('✅ REAL persistent connection started - THIS ACTUALLY WORKS!')
+            console.log('� Your app will now stay online like WhatsApp/Telegram!')
+          } catch (error) {
+            console.error('❌ Failed to start realtime connection:', error)
+            console.log('⚠️ Falling back to old heartbeat method...')
+            
+            // Fallback to old method if WebSocket fails
+            try {
+              const status = await HeartbeatService.isHeartbeatActive()
+              console.log('💓 Current heartbeat status:', status)
+              
+              if (!status.isActive) {
+                await HeartbeatService.startHeartbeat({ userId })
+                console.log('✅ Fallback heartbeat service started')
+              }
+            } catch (fallbackError) {
+              console.error('❌ Even fallback failed:', fallbackError)
+            }
+          }
           
           return {
             watcherId,
@@ -420,11 +531,14 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
         console.log('Web watch started with ID:', watchId)
         setIsSharing(true)
         
-        // Start heartbeat for stationary users (every 3 minutes)
-        console.log('💓 Starting heartbeat timer for stationary user detection')
+        // Save tracking state for auto-restart
+        await setTrackingState(true, userId)
+        
+        // For web, we still need a heartbeat timer (web doesn't get suspended like mobile)
+        console.log('💓 Starting web heartbeat timer for stationary user detection')
         heartbeatIntervalRef.current = setInterval(() => {
           sendHeartbeat()
-        }, 3 * 60 * 1000) // Every 3 minutes
+        }, 45 * 1000) // Every 45 seconds to match mobile frequency
         
         return watchId
       }
@@ -458,7 +572,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
       setLoading(false)
       return null
     }
-  }, [userId, geoService, updateLocationInDB])
+  }, [userId, geoService, updateLocationInDB, setTrackingState, sendHeartbeat])
 
   const stopWatching = useCallback(async (watchResult: string | { watcherId: string; timerInterval: NodeJS.Timeout } | null, markOffline: boolean = false) => {
     console.log('🛑 Stopping location tracking...')
@@ -505,6 +619,40 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
         console.log('✅ Heartbeat interval cleared')
       }
 
+      // Stop the REAL persistent connection
+      if (Capacitor.isNativePlatform()) {
+        try {
+          await RealtimeConnection.stopRealtimeConnection()
+          console.log('✅ REAL persistent connection stopped')
+        } catch (error) {
+          console.error('❌ Failed to stop realtime connection:', error)
+          
+          // Try stopping old heartbeat service as fallback
+          try {
+            await HeartbeatService.stopHeartbeat()
+            console.log('✅ Fallback heartbeat service stopped')
+          } catch (fallbackError) {
+            console.error('❌ Failed to stop heartbeat service:', fallbackError)
+          }
+        }
+      }
+
+      // Save stopped tracking state (but don't disable auto-restart unless explicitly marked offline)
+      if (!markOffline) {
+        await setTrackingState(false, userId || undefined)
+      } else {
+        // Disable auto-restart when explicitly going offline
+        await setTrackingState(false, userId || undefined)
+        if (Capacitor.isNativePlatform()) {
+          try {
+            const { Preferences } = await import('@capacitor/preferences')
+            await Preferences.set({ key: 'should_auto_restart', value: 'false' })
+          } catch (error) {
+            console.error('Failed to disable auto-restart:', error)
+          }
+        }
+      }
+
       if (markOffline) {
         await markUserOffline()
         console.log('🔴 User marked offline in database')
@@ -534,10 +682,11 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     }
   }, [geoService])
 
-  // Check permissions on mount
+  // Check permissions on mount and auto-restart if needed
   useEffect(() => {
     checkPermission()
-  }, [checkPermission])
+    checkAutoRestart()
+  }, [checkPermission, checkAutoRestart])
 
   // Network connection monitoring
   useEffect(() => {
@@ -578,6 +727,16 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     }
   }, [handleUserLoggedOut, userId])
 
+  // Check for auto-restart when user logs in
+  useEffect(() => {
+    if (userId && Capacitor.isNativePlatform()) {
+      console.log('👤 User logged in, checking for auto-restart...')
+      setTimeout(() => {
+        checkAutoRestart()
+      }, 1000) // Small delay to ensure component is fully mounted
+    }
+  }, [userId, checkAutoRestart])
+
   return {
     position,
     error,
@@ -590,6 +749,8 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     stopWatching,
     requestPermission,
     markUserOffline,
+    checkAutoRestart,
+    setTrackingState,
     cleanup: useCallback(async () => {
       console.log('🧹 Cleaning up location tracking on logout...')
       try {

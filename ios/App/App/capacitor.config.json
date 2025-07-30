@@ -29,7 +29,16 @@
 			"activitiesInterval": 60000,
 			"activityType": "AutomotiveNavigation",
 			"notificationIconLarge": "@mipmap/ic_launcher",
-			"notificationIconSmall": "@mipmap/ic_launcher"
+			"notificationIconSmall": "@mipmap/ic_launcher",
+			"priority": "PRIORITY_HIGH_ACCURACY",
+			"maxWaitTime": 60000,
+			"deferTime": 0,
+			"autoSync": true,
+			"batchSync": false,
+			"disableElasticity": true,
+			"elasticityMultiplier": 1,
+			"disableStopDetection": true,
+			"isDebugging": false
 		},
 		"CapacitorHttp": {
 			"enabled": true

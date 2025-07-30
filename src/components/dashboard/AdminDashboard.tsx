@@ -132,20 +132,20 @@ export default function AdminDashboard() {
         .select('id', { count: 'exact' })
         .neq('role', 'admin')
 
-      // Online users (users who have updated their location in the last 5 minutes)
-      // This represents users who are currently connected and recently active
-      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+      // Online users (users who have updated their location in the last 2 minutes)
+      // More realistic timeframe since our service updates every 45 seconds
+      const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString()
       const { count: onlineUsers } = await supabase
         .from('user_locations')
         .select('user_id', { count: 'exact' })
-        .gte('timestamp', fiveMinutesAgo)
+        .gte('timestamp', twoMinutesAgo)
 
       // Active users (actively sharing location AND recently updated)
       const { count: activeUsers } = await supabase
         .from('user_locations')
         .select('user_id', { count: 'exact' })
         .eq('is_active', true)
-        .gte('timestamp', fiveMinutesAgo)
+        .gte('timestamp', twoMinutesAgo)
 
       const newStats = {
         totalUsers: totalUsers || 0,

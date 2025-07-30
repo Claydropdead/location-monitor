@@ -23,8 +23,10 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(android.os.Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         
-        // Register our custom plugin
+        // Register our custom plugins
         registerPlugin(LocationServiceBridge.class);
+        registerPlugin(HeartbeatPlugin.class);
+        registerPlugin(RealtimeConnectionPlugin.class);  // NEW: The real solution
         
         android.util.Log.d("MainActivity", "📱 App started successfully");
         
