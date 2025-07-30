@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { GeolocationPosition } from '@/types'
 import { Capacitor } from '@capacitor/core'
 import { NativeGeolocationService } from '@/lib/native-geolocation'
+import { batteryOptimizationService } from '@/lib/battery-optimization'
 
 interface UseLocationOptions {
   enableHighAccuracy?: boolean
@@ -24,7 +25,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
   // Use ref for retry count to avoid triggering re-renders
   const retryCountRef = useRef(0)
   const lastUpdateRef = useRef(0)
-  const updateThrottle = 5000 // Allow database updates every 5 seconds to match GPS interval
+  const updateThrottle = 5000
   
   const supabase = createClient()
   
@@ -37,8 +38,8 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
 
   const checkPermission = useCallback(async () => {
     try {
-      const result = await geoService.requestPermissions()
-      setPermission(result.granted ? 'granted' : 'denied')
+      const permissions = await geoService.requestPermissions()
+      setPermission(permissions.granted ? 'granted' : 'denied')
     } catch (error) {
       console.warn('Could not query geolocation permission:', error)
       setPermission('denied')
@@ -51,13 +52,11 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
       return
     }
 
-    // Throttle updates: only update database every 5 seconds unless forced
     const now = Date.now()
-    if (!force && (now - lastUpdateRef.current) < updateThrottle) {
+    if (!force && now - lastUpdateRef.current < updateThrottle) {
       console.log('⏱️ Location update throttled, skipping database write')
       return
     }
-    
     lastUpdateRef.current = now
 
     console.log('🌍 Updating location in DB for user:', userId)
@@ -65,10 +64,9 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     console.log('🎯 Accuracy:', pos.coords.accuracy ? `±${Math.round(pos.coords.accuracy)}m` : 'Unknown')
 
     try {
-      // UPSERT approach: Single record per user - insert if doesn't exist, update if exists
       console.log('🔄 Upserting location record (single record per user)...')
       
-      const { error: upsertError } = await supabase
+      const { error } = await supabase
         .from('user_locations')
         .upsert({
           user_id: userId,
@@ -78,25 +76,25 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
           timestamp: new Date().toISOString(),
           is_active: true
         }, {
-          onConflict: 'user_id' // Update existing record for this user_id
+          onConflict: 'user_id'
         })
 
-      if (upsertError) {
-        console.error('❌ Error upserting location:', upsertError)
+      if (error) {
+        console.error('❌ Error upserting location:', error)
         console.error('❌ Upsert error details:', {
-          message: upsertError.message,
-          code: upsertError.code,
-          details: upsertError.details,
-          hint: upsertError.hint
+          message: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint
         })
-        throw upsertError
+        throw error
       }
 
       console.log('✅ Location record upserted successfully (single record per user)')
-
-      // Verify the record was updated/created properly
+      
+      // Verification query
       console.log('🔍 Verifying location record...')
-      const { data: verification, error: verifyError } = await supabase
+      const { data: verifyData, error: verifyError } = await supabase
         .from('user_locations')
         .select('id, is_active, timestamp')
         .eq('user_id', userId)
@@ -106,57 +104,52 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
 
       if (verifyError) {
         console.error('❌ Error verifying location record:', verifyError)
-      } else if (verification) {
+      } else if (verifyData) {
         console.log('✅ Verification successful - Active record found:', {
-          id: verification.id,
-          is_active: verification.is_active,
-          timestamp: verification.timestamp
+          id: verifyData.id,
+          is_active: verifyData.is_active,
+          timestamp: verifyData.timestamp
         })
       } else {
         console.error('❌ Verification failed - No active record found!')
       }
 
-      // Notify parent component that location was updated
       if (onLocationUpdate) {
         onLocationUpdate()
       }
-    } catch (err: unknown) {
-      console.error('Failed to update location in database:', err)
-      const errorObj = err as { message?: string, code?: string, details?: unknown, hint?: string }
+    } catch (error) {
+      console.error('Failed to update location in database:', error)
       console.error('Error details:', {
-        message: errorObj?.message,
-        code: errorObj?.code,
-        details: errorObj?.details,
-        hint: errorObj?.hint,
-        userId,
+        message: (error as { message?: string })?.message,
+        code: (error as { code?: string })?.code,
+        details: (error as { details?: string })?.details,
+        hint: (error as { hint?: string })?.hint,
+        userId: userId,
         coords: {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           accuracy: pos.coords.accuracy
         }
       })
-      
-      // Don't throw error, just log it - we don't want to break the location tracking
-      // The UI will still show the position even if database update fails
     }
   }, [userId, supabase, onLocationUpdate])
 
   // Simple mark user as offline when they close the app
   const markUserOffline = useCallback(async () => {
-    if (!userId) return
-    
-    console.log('🔴 Marking user offline:', userId)
-    try {
-      await supabase
-        .from('user_locations')
-        .update({ 
-          is_active: false,
-          timestamp: new Date().toISOString()
-        })
-        .eq('user_id', userId)
-        .eq('is_active', true)
-    } catch (err) {
-      console.error('Failed to mark user offline:', err)
+    if (userId) {
+      console.log('🔴 Marking user offline:', userId)
+      try {
+        await supabase
+          .from('user_locations')
+          .update({
+            is_active: false,
+            timestamp: new Date().toISOString()
+          })
+          .eq('user_id', userId)
+          .eq('is_active', true)
+      } catch (error) {
+        console.error('Failed to mark user offline:', error)
+      }
     }
   }, [userId, supabase])
 
@@ -165,40 +158,38 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     setError(null)
 
     try {
-      const pos = await geoService.getCurrentPosition()
-      
-      if (pos) {
-        setPosition(pos)
-        updateLocationInDB(pos, true) // Force update for manual getCurrentPosition
+      const position = await geoService.getCurrentPosition()
+      if (position) {
+        setPosition(position)
+        updateLocationInDB(position, true)
       } else {
         setError('Unable to get current position')
       }
       setLoading(false)
-    } catch (err: unknown) {
-      console.error('getCurrentPosition error:', err)
+    } catch (error) {
+      console.error('getCurrentPosition error:', error)
       
       let errorMessage = 'An error occurred while retrieving location'
-      
-      if (err && typeof err === 'object' && 'code' in err) {
-        const errorCode = (err as { code?: number }).code
+      if (error && typeof error === 'object' && 'code' in error) {
+        const errorCode = (error as { code: number }).code
         switch (errorCode) {
-          case 1: // PERMISSION_DENIED
+          case 1:
             errorMessage = 'Location access denied by user'
             setPermission('denied')
             break
-          case 2: // POSITION_UNAVAILABLE
+          case 2:
             errorMessage = 'Location information is unavailable'
             break
-          case 3: // TIMEOUT
+          case 3:
             errorMessage = 'Location request timed out'
             break
           default:
             errorMessage = `Unknown location error (code: ${errorCode})`
         }
-      } else if (err && typeof err === 'object' && 'message' in err) {
-        errorMessage = (err as { message: string }).message
+      } else if (error && typeof error === 'object' && 'message' in error) {
+        errorMessage = (error as { message: string }).message
       }
-      
+
       setError(errorMessage)
       setLoading(false)
     }
@@ -212,16 +203,24 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     }
 
     console.log('🚀 Starting background location tracking for user:', userId)
-    setError(null) // Clear any previous errors
+    setError(null)
     setLoading(true)
 
     try {
       if (Capacitor.isNativePlatform()) {
         console.log('📱 Starting background geolocation with notification...')
         
+        // Request battery optimization exemption for reliable background tracking
+        console.log('🔋 Requesting battery optimization exemption...')
+        const batteryOptimized = await batteryOptimizationService.requestDisableBatteryOptimizations()
+        if (!batteryOptimized) {
+          console.warn('⚠️ Battery optimization exemption not granted - background tracking may be unreliable')
+        }
+        
         try {
           // Use Capacitor Community Background Geolocation plugin
           const { registerPlugin } = await import('@capacitor/core')
+          
           interface BackgroundGeolocationPlugin {
             addWatcher(
               options: {
@@ -246,15 +245,17 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
           let timerInterval: NodeJS.Timeout | null = null
           let currentPosition: GeolocationPosition | null = null
           
-          // Add location update listener with notification - DISTANCE-BASED + TIMER-BASED HYBRID
+          // Optimized location update listener with smart filtering
           const watcherId = await BackgroundGeolocation.addWatcher(
             {
               backgroundMessage: "📍 Location Monitor is tracking your location",
               backgroundTitle: "Location Tracking Active", 
               requestPermissions: true,
               stale: false,
-              distanceFilter: 3,  // Reduced to 3 meters for higher sensitivity to movement
-              enableHighAccuracy: true  // Force high accuracy GPS mode
+              
+              // Smart distance filtering based on app state
+              distanceFilter: 10,  // 10 meters - good balance for movement detection
+              enableHighAccuracy: true
             },
             (location?: { latitude: number; longitude: number; accuracy?: number; altitude?: number; altitudeAccuracy?: number; bearing?: number; speed?: number; time?: number }, error?: { message: string; code?: string }) => {
               if (error) {
@@ -264,12 +265,12 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
               }
 
               if (location) {
-                console.log('📍 Background location update (movement-based):', location.latitude, location.longitude)
+                console.log('📍 Background location update:', location.latitude, location.longitude)
                 console.log('🎯 Location accuracy:', location.accuracy ? `±${Math.round(location.accuracy)}m` : 'Unknown')
                 
-                // Only process locations with high accuracy (within 5 meters)
+                // Accept reasonable accuracy (within 20 meters for background)
                 const accuracy = location.accuracy || 999
-                if (accuracy > 5) {
+                if (accuracy > 20) {
                   console.warn('⚠️ Location accuracy too low:', `±${Math.round(accuracy)}m - skipping update`)
                   return
                 }
@@ -297,21 +298,21 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
             }
           )
           
-          // Set up 5-second timer for stationary updates
+          // Set up 45-second timer for background location updates
           timerInterval = setInterval(async () => {
             const now = Date.now()
-            // If no movement-based update in last 5 seconds, get current position
-            if (now - lastLocationTime >= 5000) {
-              console.log('⏰ Timer-based location update (stationary)')
+            // If no movement-based update in last 45 seconds, get current position
+            if (now - lastLocationTime >= 45000) {
+              console.log('⏰ Timer-based location check (background/stationary)')
               try {
                 // Get current position using regular geolocation for timer updates
                 const position = await geoService.getCurrentPosition()
                 if (position) {
                   console.log('🎯 Timer location accuracy:', position.coords.accuracy ? `±${Math.round(position.coords.accuracy)}m` : 'Unknown')
                   
-                  // Only process locations with high accuracy (within 5 meters)
+                  // Accept reasonable accuracy for background timer updates (within 30 meters)
                   const accuracy = position.coords.accuracy || 999
-                  if (accuracy > 5) {
+                  if (accuracy > 30) {
                     console.warn('⚠️ Timer location accuracy too low:', `±${Math.round(accuracy)}m - using cached position instead`)
                     // Fall through to use cached position
                   } else {
@@ -337,74 +338,74 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
                 }
               }
             }
-          }, 5000) // Every 5 seconds
+          }, 45000)  // Check every 45 seconds
           
           console.log('✅ Background geolocation started with watcher ID:', watcherId)
           setLoading(false)
           setIsSharing(true)
           
-          // Store timer reference for cleanup
-          return { watcherId, timerInterval }
-        } catch (serviceError) {
-          console.error('❌ Background geolocation failed:', serviceError)
-          setError('Failed to start background location: ' + (serviceError as Error).message)
-          throw serviceError
+          return {
+            watcherId,
+            timerInterval
+          }
+        } catch (error) {
+          console.error('❌ Background geolocation failed:', error)
+          setError('Failed to start background location: ' + (error as { message: string }).message)
+          throw error
         }
       } else {
+        // Web fallback
         console.log('🌐 Using web geolocation fallback...')
-        
-        const watchId = await geoService.startWatching((position: GeolocationPosition) => {
+        const watchId = await geoService.startWatching((position) => {
           console.log('Location updated:', position.coords.latitude, position.coords.longitude)
-          retryCountRef.current = 0 // Reset retry count on success
+          retryCountRef.current = 0
           setLoading(false)
           setPosition(position)
-          updateLocationInDB(position) // Throttled updates for continuous watching
+          updateLocationInDB(position)
         })
-
+        
         console.log('Web watch started with ID:', watchId)
         setIsSharing(true)
         return watchId
       }
-    } catch (err: unknown) {
-      console.error('❌ Start watching error:', err)
+    } catch (error) {
+      console.error('❌ Start watching error:', error)
       
       let errorMessage = 'Failed to start location monitoring: '
-      
-      if (err && typeof err === 'object' && 'code' in err) {
-        const errorCode = (err as { code?: number }).code
+      if (error && typeof error === 'object' && 'code' in error) {
+        const errorCode = (error as { code: number }).code
         switch (errorCode) {
-          case 1: // PERMISSION_DENIED
+          case 1:
             errorMessage += 'Permission denied - Please allow location access'
             setPermission('denied')
             break
-          case 2: // POSITION_UNAVAILABLE
+          case 2:
             errorMessage += 'Position unavailable - GPS signal not available'
             break
-          case 3: // TIMEOUT
+          case 3:
             errorMessage += 'Location request timed out'
             break
           default:
             errorMessage += `Unknown error (code: ${errorCode})`
         }
-      } else if (err && typeof err === 'object' && 'message' in err) {
-        errorMessage += (err as { message: string }).message
+      } else if (error && typeof error === 'object' && 'message' in error) {
+        errorMessage += (error as { message: string }).message
       } else {
         errorMessage += 'Please check your location settings and try again.'
       }
-      
+
       setError(errorMessage)
       setLoading(false)
       return null
     }
   }, [userId, geoService, updateLocationInDB])
 
-  const stopWatching = useCallback(async (watcherData?: { watcherId: string; timerInterval: NodeJS.Timeout } | string | null, shouldGoOffline = false) => {
+  const stopWatching = useCallback(async (watchResult: string | { watcherId: string; timerInterval: NodeJS.Timeout } | null, markOffline: boolean = false) => {
     console.log('🛑 Stopping location tracking...')
     
     try {
       if (Capacitor.isNativePlatform()) {
         console.log('📱 Stopping background geolocation...')
-        
         try {
           const { registerPlugin } = await import('@capacitor/core')
           interface BackgroundGeolocationPlugin {
@@ -412,27 +413,23 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
           }
           const BackgroundGeolocation = registerPlugin<BackgroundGeolocationPlugin>('BackgroundGeolocation')
           
-          // Handle both old string format and new object format
-          if (watcherData) {
-            if (typeof watcherData === 'string') {
-              // Legacy format - just the watcher ID
-              await BackgroundGeolocation.removeWatcher({ id: watcherData })
-              console.log('✅ Background geolocation watcher removed:', watcherData)
+          if (watchResult) {
+            if (typeof watchResult === 'string') {
+              await BackgroundGeolocation.removeWatcher({ id: watchResult })
+              console.log('✅ Background geolocation watcher removed:', watchResult)
             } else {
-              // New format with timer
-              await BackgroundGeolocation.removeWatcher({ id: watcherData.watcherId })
-              console.log('✅ Background geolocation watcher removed:', watcherData.watcherId)
+              await BackgroundGeolocation.removeWatcher({ id: watchResult.watcherId })
+              console.log('✅ Background geolocation watcher removed:', watchResult.watcherId)
               
-              if (watcherData.timerInterval) {
-                clearInterval(watcherData.timerInterval)
+              if (watchResult.timerInterval) {
+                clearInterval(watchResult.timerInterval)
                 console.log('✅ Timer interval cleared')
               }
             }
           }
-        } catch (serviceError) {
-          console.warn('Background geolocation stop failed:', serviceError)
+        } catch (error) {
+          console.warn('Background geolocation stop failed:', error)
         }
-        
         setIsSharing(false)
       } else {
         console.log('🌐 Stopping web geolocation tracking...')
@@ -441,8 +438,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
         setIsSharing(false)
       }
 
-      // Mark user as offline if requested (for stop button vs sign out)
-      if (shouldGoOffline) {
+      if (markOffline) {
         await markUserOffline()
         console.log('🔴 User marked offline in database')
       }
@@ -451,15 +447,8 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     }
   }, [geoService, markUserOffline])
 
-  const checkSharingState = useCallback(async () => {
-    // For native platforms, we'll rely on the component state since 
-    // background geolocation doesn't provide a state check API
-    if (!Capacitor.isNativePlatform()) {
-      return
-    }
-
-    // Don't run background tracking if user is not logged in
-    if (!userId && isSharing) {
+  const handleUserLoggedOut = useCallback(async () => {
+    if (Capacitor.isNativePlatform() && !userId && isSharing) {
       console.log('👤 User not logged in - stopping any background tracking...')
       setIsSharing(false)
       return
@@ -468,8 +457,7 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
 
   const requestPermission = useCallback(async () => {
     try {
-      const result = await geoService.requestPermissions()
-      const granted = result.granted
+      const granted = (await geoService.requestPermissions()).granted
       setPermission(granted ? 'granted' : 'denied')
       return granted
     } catch (error) {
@@ -479,32 +467,17 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     }
   }, [geoService])
 
+  // Check permissions on mount
   useEffect(() => {
     checkPermission()
   }, [checkPermission])
 
-  // Simple effect to ensure no unauthorized background tracking
+  // Handle user logout cleanup
   useEffect(() => {
-    if (!Capacitor.isNativePlatform()) {
-      return
+    if (Capacitor.isNativePlatform()) {
+      handleUserLoggedOut()
     }
-
-    // Cleanup any old MediaStyle services on mount
-    const cleanupOldServices = async () => {
-      try {
-        const LocationServiceBridge = (await import('@/lib/location-service-bridge')).default
-        await LocationServiceBridge.stopLocationService()
-        console.log('🧹 Stopped any existing MediaStyle location service')
-      } catch (error) {
-        console.log('ℹ️ No existing MediaStyle service to stop')
-      }
-    }
-
-    cleanupOldServices()
-
-    // Check once on mount and when userId changes
-    checkSharingState()
-  }, [checkSharingState, userId])
+  }, [handleUserLoggedOut, userId])
 
   return {
     position,
@@ -517,16 +490,19 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
     stopWatching,
     requestPermission,
     markUserOffline,
-    // Add cleanup method for logout
     cleanup: useCallback(async () => {
       console.log('🧹 Cleaning up location tracking on logout...')
       try {
         if (Capacitor.isNativePlatform()) {
-          // Note: We can't stop individual watchers without their IDs
-          // The background geolocation will stop when the app is closed
           console.log('📱 Background geolocation will stop when app closes')
         } else {
           await geoService.stopWatching()
+        }
+        
+        // Mark user offline when cleaning up
+        if (userId) {
+          console.log('🔴 Marking user offline during cleanup...')
+          await markUserOffline()
         }
         
         setIsSharing(false)
@@ -536,6 +512,6 @@ export const useLocation = (userId: string | null, options: UseLocationOptions =
       } catch (error) {
         console.error('❌ Cleanup error:', error)
       }
-    }, [geoService])
+    }, [geoService, userId, markUserOffline])
   }
 }

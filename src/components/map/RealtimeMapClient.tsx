@@ -381,10 +381,9 @@ export default function RealtimeMapClient({ markers }: RealtimeMapClientProps) {
       {markers.map((marker) => {
         console.log('🎯 Rendering marker:', marker.id, 'at position:', marker.position, 'is_active:', marker.location.is_active)
         
-        // Check both time-based and database-based status
-        const isRecentTime = new Date(marker.location.timestamp).getTime() > Date.now() - 5 * 60 * 1000 // 5 minutes
+        // Only check database is_active status (no time-based timeout)
         const isActiveInDB = marker.location.is_active // Check database is_active status
-        const isOnline = isRecentTime && isActiveInDB // User is online if both conditions are true
+        const isOnline = isActiveInDB // User is online if is_active is true in database
         
         return (
           <Marker

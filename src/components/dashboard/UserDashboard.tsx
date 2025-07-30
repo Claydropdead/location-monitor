@@ -13,6 +13,7 @@ export default function UserDashboard() {
   const [loading, setLoading] = useState(true)
   const [lastLocationUpdate, setLastLocationUpdate] = useState<Date | null>(null)
   const [userWentOfflineManually, setUserWentOfflineManually] = useState(false) // Track manual offline
+  const [isSigningOut, setIsSigningOut] = useState(false) // Track signing out state
   
   const supabase = createClient()
   const router = useRouter()
@@ -68,8 +69,8 @@ export default function UserDashboard() {
   // Auto-start location tracking when user logs in
   useEffect(() => {
     const autoStartLocationTracking = async () => {
-      if (!user || isSharing || watchId || userWentOfflineManually) {
-        // Don't start if no user, already sharing, already have a watch ID, or user manually went offline
+      if (!user || isSharing || watchId || userWentOfflineManually || isSigningOut) {
+        // Don't start if no user, already sharing, already have a watch ID, user manually went offline, or signing out
         return
       }
 
@@ -97,7 +98,7 @@ export default function UserDashboard() {
     }
 
     autoStartLocationTracking()
-  }, [user, isSharing, watchId, userWentOfflineManually, permission, requestPermission, startWatching])
+  }, [user, isSharing, watchId, userWentOfflineManually, isSigningOut, permission, requestPermission, startWatching])
 
   const handleLocationToggle = async () => {
     if (!user?.id) return
@@ -154,34 +155,44 @@ export default function UserDashboard() {
   const handleSignOut = async () => {
     try {
       console.log('🚪 User signing out - cleaning up location tracking...')
+      setIsSigningOut(true) // Set signing out state to prevent UI flicker
       
-      // Clear manual offline state
-      setUserWentOfflineManually(false)
+      // Remember the user's current state before any cleanup
+      const wasManuallyOffline = userWentOfflineManually
       
-      // Use the comprehensive cleanup method
-      if (cleanup) {
-        await cleanup()
-      }
-      
-      // Legacy cleanup for safety
+      // Stop any active location tracking first
       if (isSharing && watchId) {
-        await stopWatching(watchId)
+        console.log('🛑 Stopping active location tracking before logout...')
+        await stopWatching(watchId, true) // true = mark offline
+        setWatchId(null)
       }
       
-      // Sign out: DELETE user location record completely
+      // Always delete user location record on logout (regardless of sharing state)
       if (user?.id) {
+        console.log('🗑️ Deleting user location record on logout...')
         await supabase
           .from('user_locations')
           .delete()
           .eq('user_id', user.id)
-        console.log('🗑️ User location record DELETED on sign out')
+        console.log('✅ User location record deleted')
       }
+      
+      // Use the comprehensive cleanup method but prevent it from restarting
+      if (cleanup) {
+        console.log('🧹 Running comprehensive cleanup...')
+        await cleanup()
+      }
+      
+      // Clear states after cleanup to prevent any restart attempts
+      setUserWentOfflineManually(false)
+      setWatchId(null)
 
       await supabase.auth.signOut()
       console.log('✅ Sign out completed, redirecting to login...')
       router.push('/login')
     } catch (error) {
       console.error('Error signing out:', error)
+      setIsSigningOut(false) // Reset state if error occurs
     }
   }
 
@@ -213,10 +224,11 @@ export default function UserDashboard() {
             </div>
             <button
               onClick={handleSignOut}
-              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+              disabled={isSigningOut}
+              className={`inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-opacity duration-200`}
             >
               <LogOut className="h-4 w-4 mr-2" />
-              Sign Out
+              {isSigningOut ? 'Signing Out...' : 'Sign Out'}
             </button>
           </div>
         </div>
@@ -288,21 +300,25 @@ export default function UserDashboard() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center">
                   <div className={`w-3 h-3 rounded-full mr-3 ${
-                    isSharing ? 'bg-green-500 animate-pulse' : 'bg-red-500'
+                    isSigningOut ? 'bg-yellow-500' : isSharing ? 'bg-green-500 animate-pulse' : 'bg-red-500'
                   }`}></div>
                   <span className={`text-lg font-semibold ${
-                    isSharing ? 'text-green-600' : 'text-red-600'
+                    isSigningOut ? 'text-yellow-600' : isSharing ? 'text-green-600' : 'text-red-600'
                   }`}>
-                    {isSharing ? '🟢 ONLINE - ACTIVELY SHARING' : '🔴 OFFLINE - NOT SHARING'}
+                    {isSigningOut ? '🔄 SIGNING OUT...' : isSharing ? '🟢 ONLINE - ACTIVELY SHARING' : '🔴 OFFLINE - NOT SHARING'}
                   </span>
                 </div>
-                {isSharing && (
+                {isSharing && !isSigningOut && (
                   <span className="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded">
                     Tracking in background
                   </span>
                 )}
               </div>
-              {isSharing ? (
+              {isSigningOut ? (
+                <p className="text-sm text-gray-600 mt-2">
+                  Stopping location tracking and signing out...
+                </p>
+              ) : isSharing ? (
                 <p className="text-sm text-gray-600 mt-2">
                   Your location is being shared and will continue even when you minimize the app. 
                   You can go offline anytime using the button below.
@@ -329,15 +345,21 @@ export default function UserDashboard() {
             <div className="flex space-x-4">
               <button
                 onClick={handleLocationToggle}
-                disabled={loading || permission === 'denied'}
+                disabled={loading || permission === 'denied' || isSigningOut}
                 className={`inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm ${
-                  isSharing
+                  isSigningOut 
+                    ? 'text-white bg-gray-500 cursor-not-allowed' 
+                    : isSharing
                     ? 'text-white bg-red-600 hover:bg-red-700 focus:ring-red-500'
                     : 'text-white bg-green-600 hover:bg-green-700 focus:ring-green-500'
                 } disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors duration-200`}
               >
                 <MapPin className="h-5 w-5 mr-2" />
-                {isSharing ? '� Go Offline' : '📍 Start Sharing Location'}
+                {isSigningOut 
+                  ? '🔄 Signing Out...' 
+                  : isSharing 
+                  ? '🔴 Go Offline' 
+                  : '📍 Start Sharing Location'}
               </button>
 
               {permission === 'denied' && (

@@ -8,10 +8,36 @@
 	"plugins": {
 		"Geolocation": {
 			"enableBackgroundLocationUpdates": true
+		},
+		"BackgroundGeolocation": {
+			"notificationTitle": "Location Tracking Active",
+			"notificationText": "📍 Location Monitor is tracking your location",
+			"enableHighAccuracy": true,
+			"distanceFilter": 10,
+			"interval": 10000,
+			"fastestInterval": 5000,
+			"backgroundInterval": 45000,
+			"backgroundDistanceFilter": 15,
+			"stale": false,
+			"debug": false,
+			"stopOnTerminate": false,
+			"startOnBoot": false,
+			"enableWakeLock": true,
+			"enableForegroundService": true,
+			"locationProvider": "ANDROID_GPS",
+			"saveBatteryOnBackground": false,
+			"activitiesInterval": 60000,
+			"activityType": "AutomotiveNavigation",
+			"notificationIconLarge": "@mipmap/ic_launcher",
+			"notificationIconSmall": "@mipmap/ic_launcher"
+		},
+		"CapacitorHttp": {
+			"enabled": true
 		}
 	},
 	"packageClassList": [
 		"BackgroundGeolocation",
+		"DevicePlugin",
 		"GeolocationPlugin"
 	]
 }

@@ -132,13 +132,11 @@ export default function AdminDashboard() {
         .select('id', { count: 'exact' })
         .neq('role', 'admin')
 
-      // Online users (active in last 5 minutes)
-      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+      // Online users (based on is_active status only, no time limit)
       const { count: onlineUsers } = await supabase
         .from('user_locations')
         .select('user_id', { count: 'exact' })
         .eq('is_active', true)
-        .gte('timestamp', fiveMinutesAgo)
 
       // Active users (have location data)
       const { count: activeUsers } = await supabase
