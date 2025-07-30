@@ -60,6 +60,9 @@ public class RealtimeConnectionService extends Service {
     private BroadcastReceiver restartReceiver;
     private BroadcastReceiver heartbeatReceiver;
     
+    // BEAUTIFUL FLOATING BUBBLE - Your brilliant solution!
+    private FloatingBubble floatingBubble;
+    
     @Override
     public void onCreate() {
         super.onCreate();
@@ -87,6 +90,9 @@ public class RealtimeConnectionService extends Service {
         // Set up RESTART MECHANISM - Auto-restart if killed
         setupRestartMechanism();
         
+        // CREATE BEAUTIFUL FLOATING BUBBLE - Your brilliant solution!
+        floatingBubble = new FloatingBubble(this);
+        
         createNotificationChannel();
         startForeground(NOTIFICATION_ID, createNotification("🛡️ NUCLEAR MODE - Starting connection..."));
     }
@@ -96,7 +102,14 @@ public class RealtimeConnectionService extends Service {
         if (intent != null) {
             userId = intent.getStringExtra("userId");
             if (userId != null) {
-                Log.d(TAG, "🚀 Starting REAL connection for user: " + userId);
+                Log.d(TAG, "🚀 Starting BEAUTIFUL connection for user: " + userId);
+                
+                // Show the beautiful floating bubble - Your solution!
+                if (floatingBubble != null) {
+                    floatingBubble.showBubble();
+                    Log.d(TAG, "✨ Beautiful floating bubble displayed!");
+                }
+                
                 startPeriodicUpdates();
             } else {
                 Log.e(TAG, "❌ No userId provided, stopping service");
@@ -235,6 +248,11 @@ public class RealtimeConnectionService extends Service {
                     Log.e(TAG, "❌ Presence update failed (attempt " + consecutiveFailures + "): " + e.getMessage());
                     updateNotification("Connection Failed - Retrying...");
                     
+                    // Update bubble to show error state
+                    if (floatingBubble != null) {
+                        floatingBubble.updateBubbleStatus(false);
+                    }
+                    
                     // If too many failures, try restarting
                     if (consecutiveFailures >= 5) {
                         Log.w(TAG, "⚠️ Too many failures, restarting service...");
@@ -246,14 +264,24 @@ public class RealtimeConnectionService extends Service {
                 public void onResponse(Call call, Response response) throws IOException {
                     if (response.isSuccessful()) {
                         consecutiveFailures = 0; // Reset failure counter
-                        Log.d(TAG, "✅ REAL presence update successful!");
-                        updateNotification("Connected - User Online");
+                        Log.d(TAG, "✅ BEAUTIFUL presence update successful!");
+                        updateNotification("🛡️ Connected - User Online");
+                        
+                        // Update bubble to show success state
+                        if (floatingBubble != null) {
+                            floatingBubble.updateBubbleStatus(true);
+                        }
                     } else {
                         consecutiveFailures++;
                         String responseBody = response.body() != null ? response.body().string() : "No body";
                         Log.e(TAG, "❌ Presence update failed with status: " + response.code());
                         Log.e(TAG, "Response: " + responseBody);
                         updateNotification("Update Failed - Retrying...");
+                        
+                        // Update bubble to show error state
+                        if (floatingBubble != null) {
+                            floatingBubble.updateBubbleStatus(false);
+                        }
                     }
                     response.close();
                 }
@@ -335,6 +363,12 @@ public class RealtimeConnectionService extends Service {
         // Send final offline status
         if (userId != null) {
             sendOfflineStatus();
+        }
+        
+        // Hide the beautiful floating bubble
+        if (floatingBubble != null) {
+            floatingBubble.hideBubble();
+            Log.d(TAG, "🫧 Beautiful floating bubble hidden");
         }
         
         // Clean up nuclear weapons
