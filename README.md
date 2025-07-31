@@ -1,15 +1,14 @@
-# Real-time Location Monitoring System
+# Location Monitor Admin Dashboard
 
-A comprehensive real-time user location monitoring system built with Next.js, TypeScript, and Supabase. This application allows users to share their location and enables administrators to monitor all users on a live map with detailed user information.
+An administrative dashboard for monitoring user locations collected from a React Native mobile application. Built with Next.js, TypeScript, and Supabase for real-time location tracking and user management.
 
 ## 🚀 Features
 
-- **Real-time Location Tracking**: GPS-based location sharing with automatic updates
-- **Interactive Map**: Leaflet-powered map with user markers and hover information
-- **User Authentication**: Secure authentication with Supabase Auth
-- **Role-based Access**: Separate dashboards for users and administrators
-- **Live Updates**: Real-time subscriptions for instant location updates
-- **User Profiles**: Detailed user information including name and contact details
+- **Admin-only Access**: Secure administrative portal with role-based authentication
+- **Real-time Location Monitoring**: View user locations collected from mobile app in real-time
+- **Interactive Map**: Leaflet-powered map with user markers and detailed information
+- **User Management**: View and manage all registered users
+- **Live Updates**: Real-time subscriptions for instant location updates from mobile devices
 - **Responsive Design**: Mobile-friendly interface with Tailwind CSS
 
 ## 🛠️ Tech Stack
@@ -82,21 +81,25 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 - **Role-based Policies**: Users can only access their own data
 - **Admin Permissions**: Admins can view all user locations
 - **Secure Authentication**: Supabase Auth with email verification
-- **HTTPS Only**: All communications encrypted
+- **Admin-only Access**: Only users with admin role can access the dashboard
 
 ## 🎯 Usage
 
-### For Users:
-1. Sign up with email and password
-2. Complete your profile with name and phone (optional)
-3. Enable location sharing from the dashboard
-4. Your location will be visible to administrators
-
 ### For Administrators:
-1. Sign up and have your role changed to 'admin' in the database
-2. Access the admin dashboard to see all users
-3. View real-time locations on the interactive map
-4. Hover over markers to see user details
+1. Access the admin login page at `/login`
+2. Sign in with admin credentials (role must be set to 'admin' in database)
+3. View the admin dashboard with:
+   - Real-time user locations from mobile app
+   - User management and statistics
+   - Interactive map with location markers
+4. Monitor user activity and location updates in real-time
+
+### Setting up Admin Users:
+1. Create a user account in Supabase Auth
+2. Update the user's role to 'admin' in the `users` table:
+   ```sql
+   UPDATE users SET role = 'admin' WHERE email = 'admin@example.com';
+   ```
 
 ## 🚀 Deployment
 
@@ -116,13 +119,15 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
    - Ensure real-time is enabled for your tables
    - Check publication settings include your tables
 
-## 📱 Mobile Support
+## 📱 Mobile Integration
 
-The application is fully responsive and supports:
-- Mobile geolocation APIs
-- Touch-friendly interface
-- Progressive Web App features
-- Offline capabilities (when implemented)
+This dashboard is designed to work with a React Native mobile application that:
+- Collects user location data using device GPS
+- Sends location updates to the Supabase database
+- Registers users and manages authentication
+- Provides real-time location sharing capabilities
+
+The admin dashboard receives and displays this mobile-collected data in real-time.
 
 ## 🔧 Development
 
@@ -135,10 +140,9 @@ The application is fully responsive and supports:
 
 ### Key Components
 
-- `src/components/auth/` - Authentication forms
-- `src/components/dashboard/` - User and admin dashboards
-- `src/components/map/` - Map components
-- `src/hooks/useLocation.ts` - Location tracking hook
+- `src/components/auth/` - Admin authentication forms
+- `src/components/dashboard/` - Admin dashboard
+- `src/components/map/` - Real-time map components
 - `src/lib/supabase/` - Supabase client configuration
 
 ## 🤝 Contributing
@@ -152,33 +156,3 @@ The application is fully responsive and supports:
 ## 📄 License
 
 This project is licensed under the MIT License.
-
-## 🆘 Support
-
-For support, email [your-email] or create an issue in the repository.
-
-## 🔄 Roadmap
-
-- [ ] Push notifications for location updates
-- [ ] Geofencing capabilities
-- [ ] Location history and analytics
-- [ ] Export functionality
-- [ ] Advanced user management
-- [ ] Mobile app versions
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.

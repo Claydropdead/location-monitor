@@ -1,6 +1,7 @@
 {
-  "name": "location-monitor",
+  "name": "location-monitor-admin",
   "version": "0.1.0",
+  "description": "Admin dashboard for monitoring user locations from React Native mobile app",
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
@@ -9,14 +10,6 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@capacitor-community/background-geolocation": "^1.2.25",
-    "@capacitor/android": "^7.4.2",
-    "@capacitor/cli": "^7.4.2",
-    "@capacitor/core": "^7.4.2",
-    "@capacitor/device": "^7.0.1",
-    "@capacitor/geolocation": "^7.1.4",
-    "@capacitor/ios": "^7.4.2",
-    "@capacitor/preferences": "^7.0.1",
     "@supabase/auth-helpers-nextjs": "^0.10.0",
     "@supabase/auth-helpers-react": "^0.5.0",
     "@supabase/auth-ui-react": "^0.4.7",
