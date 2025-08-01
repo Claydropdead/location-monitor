@@ -98,105 +98,84 @@ export default function RealtimeMap() {
       }
 
       // Try a simple query first to test permissions
-      console.log('Testing user table access...')
-      const { data: testUsers, error: testError } = await supabase
-        .from('users')
-        .select('id, name, role')
-        .limit(1)
+      console.log('Checking user role...')
+      const { data: userRole, error: roleError } = await supabase
+        .rpc('get_user_role')
 
-      if (testError) {
-        console.error('User table access test failed:', {
-          error: testError,
-          message: testError.message,
-          code: testError.code,
-          details: testError.details
-        })
-      } else {
-        console.log('User table test successful:', { testUsers })
-      }
-
-      // Get all locations (we'll filter by time on the client side to show recent vs old)
-      console.log('Fetching all user locations with user data...')
-      const { data: locationsData, error: locationsError } = await supabase
-        .from('user_locations')
-        .select(`
-          id,
-          user_id,
-          latitude,
-          longitude,
-          accuracy,
-          timestamp,
-          is_active,
-          users!inner(id, name, email, phone, role)
-        `)
-        // Show ALL users forever - no time filtering here, we'll handle it in the marker logic
-        .order('timestamp', { ascending: false })
-        .returns<LocationWithUser[]>()
-
-      console.log('Locations query result:', { 
-        dataCount: locationsData?.length || 0,
-        error: locationsError,
-        errorDetails: locationsError ? {
-          message: locationsError.message,
-          code: locationsError.code,
-          details: locationsError.details,
-          hint: locationsError.hint
-        } : null
-      })
-
-      if (locationsError) {
-        console.error('Locations error:', locationsError)
-        setError(`Database error: ${locationsError.message || 'Unknown error'}`)
+      if (roleError) {
+        console.error('Role check error:', roleError)
+        setError(`Role check error: ${roleError.message}`)
         return
       }
 
-      if (!locationsData || locationsData.length === 0) {
-        console.log('No recent locations found')
+      console.log('User role:', userRole)
+      
+      if (userRole !== 'admin') {
+        setError('Access denied. Admin privileges required.')
+        return
+      }
+
+      // Use the new function to get users with locations
+      console.log('Fetching users with locations using admin function...')
+      const { data: usersData, error: usersError } = await supabase
+        .rpc('get_users_with_locations')
+
+      console.log('Users query result:', { 
+        dataCount: usersData?.length || 0,
+        error: usersError,
+        errorDetails: usersError ? {
+          message: usersError.message,
+          code: usersError.code,
+          details: usersError.details,
+          hint: usersError.hint
+        } : null
+      })
+
+      if (usersError) {
+        console.error('Users error:', usersError)
+        setError(`Database error: ${usersError.message || 'Unknown error'}`)
+        return
+      }
+
+      if (!usersData || usersData.length === 0) {
+        console.log('No users with locations found')
         setUsers([])
         return
       }
 
-      console.log('Found', locationsData.length, 'recent locations')
+      console.log('Found', usersData.length, 'users with locations')
 
-      // Group locations by user and get only the latest one for each user
-      const userLocationMap = new Map<string, LocationWithUser>()
-      
-      locationsData.forEach(location => {
-        const userId = location.users.id
-        if (!userId) {
-          console.warn('Location without user ID found:', location)
-          return
-        }
-        
-        const existingLocation = userLocationMap.get(userId)
-        if (!existingLocation || new Date(location.timestamp) > new Date(existingLocation.timestamp)) {
-          userLocationMap.set(userId, location)
-        }
-      })
-
-      // Transform the data (simple version - no complex offline detection)
-      const usersWithLatestLocation: UserWithLocation[] = Array.from(userLocationMap.values()).map(location => {
-        return {
-          id: location.users.id || '',
-          name: location.users.name || 'Unknown',
-          email: location.users.email || '',
-          phone: location.users.phone || '',
-          role: location.users.role as 'user' | 'admin' || 'user',
+      // Transform the data to match our UserWithLocation interface
+      const usersWithLatestLocation: UserWithLocation[] = usersData
+        .filter((user: any) => user.user_id && user.latest_latitude && user.latest_longitude)
+        .map((user: any) => ({
+          id: user.user_id,
+          name: user.user_name || 'Unknown',
+          email: user.user_email || '',
+          phone: user.user_phone || '',
+          role: (user.user_role as 'user' | 'admin') || 'user',
           created_at: '',
           updated_at: '',
           latest_location: {
-            id: location.id,
-            user_id: location.user_id,
-            latitude: location.latitude,
-            longitude: location.longitude,
-            accuracy: location.accuracy || 0,
-            timestamp: location.timestamp,
-            is_active: location.is_active
+            id: '', // We don't have the location ID from the function
+            user_id: user.user_id,
+            latitude: user.latest_latitude,
+            longitude: user.latest_longitude,
+            accuracy: user.latest_accuracy || 0,
+            timestamp: user.latest_timestamp || new Date().toISOString(),
+            is_active: user.is_active ?? true
           }
-        }
-      }).filter(user => user.id && user.latest_location)
+        }))
 
       console.log('Processed users:', usersWithLatestLocation.length, 'users')
+      
+      // Use immediate update for initial load, debounced for subsequent updates
+      if (loading) {
+        setUsers(usersWithLatestLocation)
+      } else {
+        debouncedSetUsers(usersWithLatestLocation)
+      }
+      setError(null)
       
       // Use immediate update for initial load, debounced for subsequent updates
       if (loading) {

@@ -101,18 +101,70 @@ export default function AdminDashboard() {
         return
       }
 
-      const { data: profile } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', authUser.id)
-        .single()
+      // Try to get user profile using RLS-safe function first
+      try {
+        const { data: userRole, error: roleError } = await supabase
+          .rpc('get_user_role')
 
-      if (profile) {
-        if (profile.role !== 'admin') {
-          router.push('/dashboard')
-          return
+        if (roleError) {
+          console.error('Role check error:', roleError)
+          // Try direct query as fallback
+          const { data: profile, error: profileError } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', authUser.id)
+            .single()
+
+          if (profileError) {
+            console.error('Profile query error:', profileError)
+            // Check if this might be an admin email
+            const adminEmails = ['admin@locationmonitor.com', 'admin@example.com']
+            const isAdminEmail = adminEmails.includes(authUser.email?.toLowerCase() || '')
+            
+            if (isAdminEmail) {
+              // Try to create admin profile
+              const { data: adminProfile, error: createError } = await supabase
+                .rpc('create_user_profile', {
+                  user_id: authUser.id,
+                  user_email: authUser.email,
+                  user_name: authUser.user_metadata?.name || authUser.email,
+                  user_role: 'admin'
+                })
+              
+              if (!createError && adminProfile) {
+                setUser(adminProfile)
+                return
+              }
+            }
+            
+            router.push('/login')
+            return
+          }
+
+          if (profile && profile.role !== 'admin') {
+            router.push('/dashboard')
+            return
+          }
+          
+          setUser(profile)
+        } else {
+          if (userRole !== 'admin') {
+            router.push('/dashboard')
+            return
+          }
+          
+          // Get full profile data
+          const { data: profile } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', authUser.id)
+            .single()
+          
+          setUser(profile)
         }
-        setUser(profile)
+      } catch (profileError) {
+        console.error('Profile check error:', profileError)
+        router.push('/login')
       }
     } catch (error) {
       console.error('Error fetching user:', error)
@@ -168,8 +220,31 @@ export default function AdminDashboard() {
   }
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut()
-    router.push('/login')
+    try {
+      // Delete admin's location data if they have any
+      if (user?.id) {
+        console.log('Deleting admin location data on sign out...')
+        const { error: deleteError } = await supabase
+          .from('user_locations')
+          .delete()
+          .eq('user_id', user.id)
+
+        if (deleteError) {
+          console.error('Error deleting admin location data:', deleteError)
+        } else {
+          console.log('Admin location data deleted successfully')
+        }
+      }
+
+      // Then sign out
+      await supabase.auth.signOut()
+      router.push('/login')
+    } catch (error) {
+      console.error('Error during admin sign out:', error)
+      // Force sign out even if there's an error
+      await supabase.auth.signOut()
+      router.push('/login')
+    }
   }
 
   const handleRefresh = async () => {
